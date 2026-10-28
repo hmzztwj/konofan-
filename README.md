@@ -61,7 +61,7 @@ tools/      全部自写工具（Python 3.10）：解密、命名还原、catalo
             AXML/dex 补丁、重打包、内存读密钥、MITM、mock server 等
 data/       清单与索引（资产清单 31,592 行、CRI 映射 7,658 行、MasterData 索引、剧情索引）
 server/     mock API + TLS 中间人（当前被客户端 TLS 信任卡住，留作后续）
-dist/       成品说明（去 mod 的 APK 走 Releases 分发）
+dist/       成品说明（去 mod 的 APK：Releases v0.1.0）
 ```
 
 ## 六、快速开始
