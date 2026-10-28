@@ -163,8 +163,13 @@
   }
 
   // ---------- 事件/首领：挂在全局，供页面内模块参考 ----------
+  var bootTs = null, reloaded = 0;
   function applyConfig(cfg) {
     CFG = cfg || {};
+    if (cfg && cfg.ts) {
+      if (bootTs === null) bootTs = cfg.ts;
+      else if (cfg.ts !== bootTs && !reloaded) { reloaded = 1; setTimeout(function () { location.reload(); }, 300); }
+    }
     window.__KONOFAN_MGR__ = CFG;
     document.documentElement.setAttribute('data-kf-events',
       (CFG.enabledEvents || []).join(','));
@@ -196,8 +201,12 @@
     }).catch(function () {});
   }
   function refreshEvents() {
-    fetch('/yuanban/master/eventcfg59.json').then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) { if (j) EVENTS = Object.keys(j); }).catch(function () {});
+    fetch('/__mgr/events').then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (Array.isArray(j)) {
+          EVENTS = j.map(function (e) { return { id: String(e.id), name: e.name || '' }; });
+        }
+      }).catch(function () {});
   }
 
   function snapshot() {
