@@ -1,0 +1,8 @@
+tools/out/
+tools/il2cppdumper/
+tools/apk/*.jar
+tools/vgmstream/
+*.apk
+*.so
+*.dat
+__pycache__/
