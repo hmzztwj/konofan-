@@ -69,12 +69,28 @@ UI 里选「类别」→ 搜名称/ID → 选中即自动填好类型和 ID。
 1. **存档备份 / 还原** —— 管理器一键把 `localStorage['oldui59.save']` 导出成文件（`Download/konofan_manager/backup_<时间>.json`）并可随时回滚；游戏侧由 bridge 提供 `POST /__mgr/state` 已有的快照，另加 `/__mgr/restore` 写回。
 2. **首页礼物角标 + 未领数量** —— 在游戏主界面「礼物」按钮上叠加未领取数量角标；数据取 `save.x.presents.length`，由 bridge 注入 CSS/角标。
 
-## 活动管理（已打通）
+## 活动管理（任务 + 剧情一起切）
 
-- 管理器「活动」面板 = **142 个活动 + 每行一个开关**，打开即生效：
-  - `启用活动过滤` 勾上 → 只保留开关打开的活动；关掉 → 游戏按原样
-  - `全部开启` / `全部关闭` / `搜索` / `保存并应用`
-- 实现：游戏壳 `MiniServer` 在 `GET /yuanban/master/questx59.json` 时读取 `config.json` 的 `eventMode=enabled` + `enabledEvents`，**把未开启的活动从 `event[]` 里剔除**，并把保留活动的 `start/end` 改成 `2020/1/1`~`2035/12/31` 让其处于"进行中"。
-  - 已验证：`eventMode=off` 时该 URL 返回 `event=[]`；`enabledEvents=["24041"]` 时返回 `events=1 ids=24041`，日志 `event filter mode=enabled keep=1/142`。
-- 管理器要显示**全部** 142 个活动（而不是被过滤后的），所以游戏壳额外提供 `GET /__mgr/events`（读原始 `questx59.json` 返回 `[{id,name,type}]`），`bridge.js` 用它上报快照。
-- 保存后 `config.ts` 变化 → bridge 检测到并自动 `location.reload()`，无需手动重启游戏。
+一个开关同时管两处数据，**保存后游戏自动刷新**：
+
+| 开关控制的东西 | 数据文件 | 处理 |
+|---|---|---|
+| 活动任务（冒险 → 活动里的「任务」卡） | `yuanban/master/questx59.json` 的 `event[]` | 未开启的活动整条剔除；保留的 `start/end` 改成 `2020/1/1`~`2035/12/31` |
+| 活动剧情（活动里的「活动剧情」列表） | `yuanban/story/index.json` 的 `story_event[]` | 按 `event_id` / `unlock_event_id` 剔除未开启活动的剧情条目 |
+
+实现方式是**落盘改写**（不依赖 HTTP 拦截，最稳）：
+
+1. 首次改写前把原文件备份成 `questx59.full.json` / `index.full.json`
+2. 之后每次都从 `.full.json` 读原始数据 → 按当前开关过滤 → 写回正式文件
+3. bridge 轮询 `/__mgr/config.json` 时触发 `applyEventPolicyToDisk()`（签名不变则跳过），随后 reload 游戏
+
+实测（只开 24041「为这禁断的最弱冒险者献上侍奉！」）：
+
+```
+disk patch questx mode=enabled keep=1
+disk patch story mode=enabled keep=4
+story/index.json → story_event 4 条，event_id 全部 = 24041
+story_main 254 / story_member 176 / story_etc 150 等主线内容不受影响
+```
+
+开关全关 → `event=[]`、`story_event=[]`，活动任务与活动剧情同时消失。
