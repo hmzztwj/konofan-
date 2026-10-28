@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>素晴管理器</title>
+<style>
+  :root{--bg:#141820;--card:#1c2230;--line:#2b3446;--fg:#e6edf7;--dim:#8a97ad;--acc:#f0b64a;--pink:#e8638c;--ok:#48c78e}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 "Microsoft YaHei",system-ui,sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:10px 16px;background:#10141b;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+  header h1{font-size:17px;margin:0;color:var(--acc)}
+  nav{display:flex;gap:6px;flex-wrap:wrap}
+  nav button{background:transparent;color:var(--dim);border:1px solid transparent;padding:6px 12px;border-radius:8px;cursor:pointer;font-size:13px}
+  nav button.on{background:var(--card);color:var(--fg);border-color:var(--line)}
+  main{padding:14px 16px 60px;max-width:1180px}
+  .pane{display:none}.pane.on{display:block}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:6px 0}
+  label{color:var(--dim);font-size:13px;min-width:64px}
+  input,select,textarea{background:#10141b;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit}
+  input[type=number]{width:110px}
+  button.act{background:var(--acc);color:#20160a;border:0;border-radius:9px;padding:8px 16px;font-weight:700;cursor:pointer}
+  button.ghost{background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:9px;padding:7px 14px;cursor:pointer}
+  button.danger{background:var(--pink);color:#fff;border:0;border-radius:9px;padding:8px 16px;font-weight:700;cursor:pointer}
+  .hint{color:var(--dim);font-size:12px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;max-height:420px;overflow:auto}
+  .chk{display:flex;gap:8px;align-items:center;background:#10141b;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:13px;cursor:pointer}
+  .chk input{width:16px;height:16px}
+  .tag{display:inline-block;padding:2px 8px;border-radius:999px;background:#243049;color:var(--dim);font-size:12px;margin-right:6px}
+  .ok{color:var(--ok)} .warn{color:var(--acc)} .bad{color:var(--pink)}
+  pre{background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:260px;overflow:auto;font-size:12px}
+.evlist{max-height:52vh;overflow:auto;border:1px solid #262b36;border-radius:8px}
+.evrow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;border-bottom:1px solid #1e222b;cursor:pointer}
+.evrow:hover{background:#1b2029}
+.evname{font-size:13px;color:#cfd6e4}
+.sw{position:relative;display:inline-block;width:46px;height:26px;flex:none}
+.sw input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.sw i{position:absolute;inset:0;background:#333a48;border-radius:13px;transition:.15s}
+.sw i:after{content:'';position:absolute;width:20px;height:20px;left:3px;top:3px;background:#8b93a5;border-radius:50%;transition:.15s}
+.sw input:checked + i{background:#ffcf5c}
+.sw input:checked + i:after{left:23px;background:#3a2c00}
+</style>
+</head>
+<body>
+<header>
+  <h1>素晴管理器</h1>
+  <nav id="nav">
+    <button data-t="gift" class="on">礼物</button>
+    <button data-t="lottery">彩票</button>
+    <button data-t="boss">首领</button>
+    <button data-t="gacha">卡池</button>
+    <button data-t="event">活动</button>
+    <button data-t="launch">启动</button>
+  </nav>
+  <span class="hint" id="ttl"></span>
+</header>
+
+<main>
+<!-- 礼物 -->
+<section class="pane on" id="p-gift">
+  <div class="card">
+    <div class="row">
+      <label>类型</label>
+      <select id="gType">
+        <option value="item">道具 / 材料（items）</option>
+        <option value="member">角色卡（类别 4）</option>
+        <option value="weapon">武器（类别 5）</option>
+        <option value="accessory">饰品（类别 6）</option>
+      </select>
+      <label>ID</label>
+      <input id="gId" placeholder="1:1" style="width:180px">
+      <label>数量</label>
+      <input id="gCount" type="number" value="1000">
+    </div>
+    <div class="row">
+      <label>礼物文案</label>
+      <input id="gMsg" placeholder="管理员发放" style="flex:1;min-width:260px" maxlength="40">
+      <span class="hint">显示在礼物箱条目上的说明文字</span>
+    </div>
+    <div class="row">
+      <label>从目录挑选</label>
+      <select id="gCat" style="min-width:190px"></select>
+      <input id="gSearch" placeholder="搜索名称/ID" style="width:200px">
+      <select id="gPick" style="min-width:260px;max-width:420px"></select>
+    </div>
+    <div class="row">
+      <span class="hint">常用：</span>
+      <button class="ghost" data-preset="1:1">金币 1:1</button>
+      <button class="ghost" data-preset="8:1">跳过券 8:1</button>
+      <button class="ghost" data-preset="29:1">体力药 29:1</button>
+      <button class="ghost" data-preset="21:800001">召唤券 21:800001</button>
+      <button class="ghost" data-member="1001100">角色卡 1001100</button>
+    </div>
+    <div class="row">
+      <button class="act" id="btnGive">赠送</button>
+      <button class="danger" id="btnTake">收回</button>
+      <span class="hint">赠送=加到存档；收回=扣掉（数量填正数）。游戏下一次轮询（≤2 秒）就会落账并刷新。</span>
+    </div>
+    <div class="row"><b>待处理队列</b><span class="hint" id="queueInfo"></span></div>
+    <pre id="queue">（空）</pre>
+    <div class="row"><button class="ghost" id="btnClearQueue">清空队列</button></div>
+  </div>
+</section>
+
+<!-- 彩票 -->
+<section class="pane" id="p-lottery">
+  <div class="card">
+    <div class="row">
+      <label>号码</label>
+      <input id="lotNo" maxlength="6" placeholder="6 位数字" style="width:140px">
+      <button class="ghost" id="btnRand">随机 6 位</button>
+      <button class="act" id="btnSaveLot">保存</button>
+    </div>
+    <p class="hint">保存后写入 <code>config.json</code> 的 <code>lottery</code> 字段，游戏端桥接可直接读取 <code>window.__KONOFAN_MGR__.lottery</code>。</p>
+    <pre id="lotOut">（未设置）</pre>
+  </div>
+</section>
+
+<!-- 首领 -->
+<section class="pane" id="p-boss">
+  <div class="card">
+    <div class="row"><label>世界BOSS</label><input id="wbId" placeholder="例如 19400073" style="width:220px"></div>
+    <div class="row"><label>竞技场BOSS</label><input id="arenaId" placeholder="例如 19400073" style="width:220px"></div>
+    <div class="row"><button class="act" id="btnSaveBoss">保存</button></div>
+    <p class="hint">首领数据在离线包里是写死的（<code>worldboss59</code> 模块）。这里写入 <code>config.boss</code>，游戏端桥接会挂到 <code>window.__KONOFAN_MGR__.boss</code>；
+      要让画面真正换首领，还需要把对应 id 的怪物表补进 <code>worldboss59</code>（下一步做，见 README）。</p>
+    <pre id="bossOut">（未设置）</pre>
+  </div>
+</section>
+
+<!-- 卡池 -->
+<section class="pane" id="p-gacha">
+  <div class="card">
+    <div class="row">
+      <b>当前激活卡池</b>
+      <span class="hint" id="poolInfo"></span>
+      <button class="ghost" id="btnPoolAll">全选</button>
+      <button class="ghost" id="btnPoolNone">清空</button>
+      <button class="act" id="btnSavePool">保存</button>
+    </div>
+    <div class="grid" id="poolList"><span class="hint">等待游戏上报卡池列表…（先启动一次游戏）</span></div>
+  </div>
+</section>
+
+<!-- 活动 -->
+<section class="pane" id="p-event">
+  <div class="card">
+    <div class="row">
+      <b>活动管理</b>
+      <input id="evSearch" placeholder="搜索活动名 / ID" style="min-width:220px">
+      <label class="chk" style="margin:0">
+        <input type="checkbox" id="evEnable">
+        <span>启用活动过滤（关掉则游戏按原样显示全部）</span>
+      </label>
+      <span class="hint" id="evInfo"></span>
+    </div>
+    <div class="row">
+      <button class="ghost" id="btnEvAll">全部开启</button>
+      <button class="ghost" id="btnEvNone">全部关闭</button>
+      <button class="act" id="btnSaveEv">保存并应用</button>
+      <span class="hint">开关打开 = 该活动在游戏「冒险 → 活动」里出现并处于进行中</span>
+    </div>
+    <div class="evlist" id="evList"><span class="hint">等待游戏上报活动列表…（先启动一次游戏）</span></div>
+  </div>
+</section>
+
+<!-- 启动 -->
+<section class="pane" id="p-launch">
+  <div class="card">
+    <div class="row">
+      <button class="act" id="btnLaunch" style="font-size:16px;padding:12px 28px">启动游戏</button>
+      <span class="hint">会直接拉起 konofanweb 壳（自带本地服务与素材检测）</span>
+    </div>
+    <div class="row"><b>存档快照</b><span class="hint" id="stateInfo">（暂无，先启动一次游戏）</span></div>
+    <pre id="stateOut">（空）</pre>
+    <div class="row">
+      <button class="ghost" id="btnReload">刷新快照</button>
+      <button class="danger" id="btnReset">清空存档（危险）</button>
+    </div>
+    <p class="hint" id="dirInfo"></p>
+  </div>
+</section>
+</main>
+
+<script src="catalog.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const readJSON = (n, d) => { try { const t = Mgr.read(n); return t ? JSON.parse(t) : d; } catch (e) { return d; } };
+const writeJSON = (n, o) => Mgr.write(n, JSON.stringify(o, null, 1));
+
+let CFG = readJSON('config.json', {});
+let GIFTS = readJSON('gifts.json', { gifts: [] });
+let STATE = readJSON('state.json', null);
+let seq = Date.now() % 1000000;
+
+$('#ttl').textContent = '共享目录：' + Mgr.dir();
+$('#dirInfo').textContent = '共享目录：' + Mgr.dir();
+
+document.querySelectorAll('#nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.id === 'p-' + b.dataset.t));
+  if (b.dataset.t === 'launch') loadState();
+  if (b.dataset.t === 'gacha') renderPools();
+  if (b.dataset.t === 'event') renderEvents();
+});
+
+/* ---------- 礼物 ---------- */
+/* ---------- 目录挑选 ---------- */
+function fillCatalog() {
+  const C = window.CATALOG || { categories: {}, items: [], equips: [] };
+  const cats = Object.entries(C.categories).map(([k, v]) => [k, v.n]);
+  $('#gCat').innerHTML = cats.map(([k, n]) => `<option value="${k}">${n}（${C.categories[k].count}）</option>`).join('');
+  $('#gCat').value = '1';
+  refreshPick();
+}
+function refreshPick() {
+  const C = window.CATALOG || { categories: {}, items: [], equips: [] };
+  const cat = $('#gCat').value, q = $('#gSearch').value.trim().toLowerCase();
+  let rows = [];
+  if (cat === '5' || cat === '6') {
+    rows = C.equips.filter(e => (e.kind === 'weapon') === (cat === '5'))
+      .filter(e => !q || e.id.includes(q) || e.n.toLowerCase().includes(q))
+      .map(e => ({ v: e.id, t: `${e.n} 【${e.id}】★${e.r}` }));
+  } else {
+    rows = C.items.filter(i => i.k.startsWith(cat + ':'))
+      .filter(i => !q || i.k.includes(q) || i.n.toLowerCase().includes(q))
+      .map(i => ({ v: i.k, t: `${i.n} 【${i.k}】` }));
+  }
+  $('#gPick').innerHTML = rows.slice(0, 800).map(r => `<option value="${r.v}">${r.t}</option>`).join('')
+    || '<option value="">（该类别下没有可发放的条目）</option>';
+}
+$('#gCat').onchange = refreshPick;
+$('#gSearch').oninput = refreshPick;
+$('#gPick').onchange = () => {
+  const C = window.CATALOG || { equips: [], items: [] };
+  const v = $('#gPick').value, cat = $('#gCat').value;
+  if (!v) return;
+  if (cat === '5') { $('#gType').value = 'weapon'; $('#gId').value = v; }
+  else if (cat === '6') { $('#gType').value = 'accessory'; $('#gId').value = v; }
+  else if (cat === '4') { $('#gType').value = 'member'; $('#gId').value = v; }
+  else { $('#gType').value = 'item'; $('#gId').value = v; }
+};
+
+document.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => {
+  $('#gId').value = b.dataset.preset;
+  $('#gType').value = 'item';
+});
+document.querySelectorAll('[data-member]').forEach(b => b.onclick = () => {
+  $('#gId').value = b.dataset.member;
+  $('#gType').value = 'member';
+});
+function renderQueue() {
+  const g = GIFTS.gifts || [];
+  $('#queueInfo').textContent = g.length ? `（${g.length} 条待处理）` : '（空）';
+  $('#queue').textContent = g.length ? JSON.stringify(g, null, 1) : '（空）';
+}
+function pushGift(type, id, count, msg) {
+  GIFTS.gifts = GIFTS.gifts || [];
+  GIFTS.gifts.push({ seq: ++seq, type, id, count, msg: msg || '管理员发放' });
+  writeJSON('gifts.json', GIFTS);
+  renderQueue();
+  Mgr.toast(`已加入队列：${type} ${id} ${count > 0 ? '+' : ''}${count}`);
+}
+$('#btnGive').onclick = () => {
+  const t = $('#gType').value, id = $('#gId').value.trim(), n = +$('#gCount').value;
+  if (!id || !n) return Mgr.toast('ID 和数量都要填');
+  pushGift(t, id, n, $('#gMsg').value.trim());
+};
+$('#btnTake').onclick = () => {
+  const t = $('#gType').value, id = $('#gId').value.trim(), n = +$('#gCount').value;
+  if (!id || !n) return Mgr.toast('ID 和数量都要填');
+  pushGift(t, id, -Math.abs(n), $('#gMsg').value.trim() || '管理员收回');
+};
+$('#btnClearQueue').onclick = () => { GIFTS = { gifts: [] }; writeJSON('gifts.json', GIFTS); renderQueue(); };
+
+/* ---------- 彩票 ---------- */
+$('#btnRand').onclick = () => { $('#lotNo').value = String(Math.floor(Math.random() * 1000000)).padStart(6, '0'); };
+$('#btnSaveLot').onclick = () => {
+  const v = $('#lotNo').value.trim();
+  if (!/^\d{6}$/.test(v)) return Mgr.toast('要 6 位数字');
+  CFG.lottery = { no: v, ts: Date.now() };
+  writeJSON('config.json', CFG);
+  $('#lotOut').textContent = JSON.stringify(CFG.lottery, null, 1);
+  Mgr.toast('已保存号码 ' + v);
+};
+
+/* ---------- 首领 ---------- */
+$('#btnSaveBoss').onclick = () => {
+  CFG.boss = { world: $('#wbId').value.trim(), arena: $('#arenaId').value.trim() };
+  writeJSON('config.json', CFG);
+  $('#bossOut').textContent = JSON.stringify(CFG.boss, null, 1);
+  Mgr.toast('已保存首领设置');
+};
+
+/* ---------- 卡池 ---------- */
+let pickedPools = new Set((CFG.activePools || []).map(String));
+function renderPools() {
+  const s = STATE || readJSON('state.json', null);
+  const pools = (s && s.pools) || [];
+  $('#poolInfo').textContent = pools.length ? `（共 ${pools.length} 个，已选 ${pickedPools.size}）` : '';
+  if (!pools.length) { $('#poolList').innerHTML = '<span class="hint">等待游戏上报卡池列表…（先启动一次游戏）</span>'; return; }
+  $('#poolList').innerHTML = pools.map(p => `
+    <label class="chk"><input type="checkbox" value="${p.id}" ${pickedPools.has(String(p.id)) ? 'checked' : ''}>
+      <span><b>${p.id}</b> <span class="hint">${p.name || ''}</span></span></label>`).join('');
+  $('#poolList').querySelectorAll('input').forEach(i => i.onchange = () => {
+    i.checked ? pickedPools.add(i.value) : pickedPools.delete(i.value);
+    $('#poolInfo').textContent = `（共 ${pools.length} 个，已选 ${pickedPools.size}）`;
+  });
+}
+$('#btnPoolAll').onclick = () => { (STATE?.pools || []).forEach(p => pickedPools.add(String(p.id))); renderPools(); };
+$('#btnPoolNone').onclick = () => { pickedPools.clear(); renderPools(); };
+$('#btnSavePool').onclick = () => {
+  CFG.activePools = [...pickedPools];
+  writeJSON('config.json', CFG);
+  Mgr.toast('卡池已保存（游戏重启后生效）');
+};
+
+/* ---------- 活动 ---------- */
+let pickedEv = new Set((CFG.enabledEvents || []).map(String));
+function renderEvents() {
+  const s = STATE || readJSON('state.json', null);
+  const evs = (s && s.events) || [];
+  $('#evInfo').textContent = evs.length ? `（共 ${evs.length} 个，已选 ${pickedEv.size}）` : '';
+  if (!evs.length) { $('#evList').innerHTML = '<span class="hint">等待游戏上报活动列表…（先启动一次游戏）</span>'; return; }
+  const kw = ($('#evSearch')?.value || '').trim().toLowerCase();
+  const rows = evs.map(e => {
+    const id = typeof e === 'string' ? e : String(e.id);
+    const nm = typeof e === 'string' ? '' : (e.name || '');
+    return { id, nm };
+  }).filter(r => !kw || r.id.includes(kw) || r.nm.toLowerCase().includes(kw));
+  $('#evList').innerHTML = rows.map(r => `
+    <label class="evrow">
+      <span class="evname"><b>${r.id}</b> ${r.nm}</span>
+      <span class="sw"><input type="checkbox" value="${r.id}" ${pickedEv.has(r.id) ? 'checked' : ''}><i></i></span>
+    </label>`).join('') || '<span class="hint">没有匹配的活动</span>';
+  $('#evList').querySelectorAll('input').forEach(i => i.onchange = () => {
+    i.checked ? pickedEv.add(i.value) : pickedEv.delete(i.value);
+    $('#evInfo').textContent = `（共 ${evs.length} 个，已开 ${pickedEv.size}）`;
+  });
+}
+$('#btnEvAll').onclick = () => { (STATE?.events || []).forEach(id => pickedEv.add(String(id))); renderEvents(); };
+$('#btnEvNone').onclick = () => { pickedEv.clear(); renderEvents(); };
+$('#btnSaveEv').onclick = () => {
+  CFG.enabledEvents = [...pickedEv];
+  CFG.eventMode = $('#evEnable').checked ? 'enabled' : '';
+  CFG.ts = Date.now();
+  writeJSON('config.json', CFG);
+  Mgr.toast(CFG.eventMode ? `已应用：${pickedEv.size} 个活动开启` : '已关闭活动过滤（游戏恢复原样）');
+};
+$('#evSearch').oninput = () => renderEvents();
+$('#evEnable').onchange = () => { $('#evList').style.opacity = $('#evEnable').checked ? 1 : .45; };
+
+/* ---------- 启动 / 快照 ---------- */
+function loadState() {
+  const s = readJSON('state.json', null);
+  STATE = s;
+  if (!s) { $('#stateInfo').textContent = '（暂无，先启动一次游戏）'; $('#stateOut').textContent = '（空）'; return; }
+  const gold = (s.items || {})['1:1'] ?? 0;
+  $('#stateInfo').innerHTML = `<span class="tag">等级 ${s.rank ?? '?'}</span>
+    <span class="tag">金币 ${Number(gold).toLocaleString()}</span>
+    <span class="tag">成员 ${(s.members || []).length}</span>
+    <span class="tag">道具 ${Object.keys(s.items || {}).length} 种</span>
+    <span class="tag">卡池 ${(s.pools || []).length}</span>
+    <span class="tag">活动 ${(s.events || []).length}</span>`;
+  $('#stateOut').textContent = JSON.stringify({ rank: s.rank, gold, members: (s.members || []).length, ts: new Date(s.ts || 0).toLocaleString() }, null, 1);
+}
+$('#btnLaunch').onclick = () => { if (Mgr.launchGame()) Mgr.toast('正在启动游戏…'); };
+$('#btnReload').onclick = loadState;
+$('#btnReset').onclick = () => {
+  if (!confirm('真的清空游戏存档？这会删掉全部进度，只能重开。')) return;
+  pushGift('reset', 'all', 1);
+};
+
+/* ---------- 初始化 ---------- */
+renderQueue(); loadState(); fillCatalog();
+setInterval(loadState, 4000);
+if (CFG.eventMode) $('#evEnable').checked = true;
+$('#evList').style.opacity = CFG.eventMode ? 1 : .45;
+if (CFG.lottery) $('#lotOut').textContent = JSON.stringify(CFG.lottery, null, 1);
+if (CFG.boss) { $('#wbId').value = CFG.boss.world || ''; $('#arenaId').value = CFG.boss.arena || ''; $('#bossOut').textContent = JSON.stringify(CFG.boss, null, 1); }
+</script>
+</body>
+</html>
