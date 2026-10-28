@@ -69,7 +69,12 @@ UI 里选「类别」→ 搜名称/ID → 选中即自动填好类型和 ID。
 1. **存档备份 / 还原** —— 管理器一键把 `localStorage['oldui59.save']` 导出成文件（`Download/konofan_manager/backup_<时间>.json`）并可随时回滚；游戏侧由 bridge 提供 `POST /__mgr/state` 已有的快照，另加 `/__mgr/restore` 写回。
 2. **首页礼物角标 + 未领数量** —— 在游戏主界面「礼物」按钮上叠加未领取数量角标；数据取 `save.x.presents.length`，由 bridge 注入 CSS/角标。
 
-## 活动管理（进行中）
+## 活动管理（已打通）
 
-- 已实现：`MiniServer` 在 `GET /yuanban/master/questx59.json` 时按 `config.eventMode`（`all`/`off`/`enabled`）与 `enabledEvents` 改写每个活动的 `start`/`end`，返回改写后的 JSON（已验证：页面 fetch 该地址返回 `2019/1/1 0:00` 表示已关闭）。
-- **未打通**：冒险 → 活动 界面的卡片列表并不按 `questx59.json` 的活动时间窗过滤（`eventMode=off` 时卡片依旧显示），说明列表数据源另有其处（候选：`quest59-extra.json`、`assets/questx59-*.js` 内嵌数据、或存档里记录的已解锁活动）。下一步要定位该来源。
+- 管理器「活动」面板 = **142 个活动 + 每行一个开关**，打开即生效：
+  - `启用活动过滤` 勾上 → 只保留开关打开的活动；关掉 → 游戏按原样
+  - `全部开启` / `全部关闭` / `搜索` / `保存并应用`
+- 实现：游戏壳 `MiniServer` 在 `GET /yuanban/master/questx59.json` 时读取 `config.json` 的 `eventMode=enabled` + `enabledEvents`，**把未开启的活动从 `event[]` 里剔除**，并把保留活动的 `start/end` 改成 `2020/1/1`~`2035/12/31` 让其处于"进行中"。
+  - 已验证：`eventMode=off` 时该 URL 返回 `event=[]`；`enabledEvents=["24041"]` 时返回 `events=1 ids=24041`，日志 `event filter mode=enabled keep=1/142`。
+- 管理器要显示**全部** 142 个活动（而不是被过滤后的），所以游戏壳额外提供 `GET /__mgr/events`（读原始 `questx59.json` 返回 `[{id,name,type}]`），`bridge.js` 用它上报快照。
+- 保存后 `config.ts` 变化 → bridge 检测到并自动 `location.reload()`，无需手动重启游戏。
