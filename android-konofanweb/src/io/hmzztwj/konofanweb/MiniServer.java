@@ -26,6 +26,7 @@ import java.util.concurrent.Executors;
  */
 public class MiniServer {
     private final File root;
+    private static File rootStatic;
     private final int wantPort;
     private ServerSocket server;
     private volatile boolean running;
@@ -38,6 +39,47 @@ public class MiniServer {
                 "Download/konofan_manager");
         if (!d.exists()) d.mkdirs();
         return d;
+    }
+
+    private static File rootForPatch() { return rootStatic; }
+
+    /** 读取管理器配置并对 questx59.json 的活动生效时间做改写；没有配置就返回 null（走原文件）。 */
+    private static byte[] eventPatchedQuestx() {
+        try {
+            java.io.File cfg = new java.io.File(mgrDir(), "config.json");
+            if (!cfg.isFile()) return null;
+            org.json.JSONObject c = new org.json.JSONObject(new String(readAll(cfg, 1 << 20), "UTF-8"));
+            String mode = c.optString("eventMode", "");
+            android.util.Log.i("KonofanWeb", "event patch candidate mode=" + mode);
+            if (mode.isEmpty()) return null;
+            java.util.Set<String> on = new java.util.HashSet<>();
+            org.json.JSONArray arr = c.optJSONArray("enabledEvents");
+            for (int i = 0; arr != null && i < arr.length(); i++) on.add(arr.getString(i));
+
+            java.io.File f = null;
+            java.io.File site = rootForPatch();
+            if (site != null) f = new java.io.File(site, "yuanban/master/questx59.json");
+            if (f == null || !f.isFile()) return null;
+
+            org.json.JSONObject root = new org.json.JSONObject(new String(readAll(f, 32 << 20), "UTF-8"));
+            org.json.JSONArray evs = root.optJSONArray("event");
+            String LIVE_START = "2020/1/1 0:00", LIVE_END = "2035/12/31 23:59";
+            String OLD_START = "2019/1/1 0:00", OLD_END = "2019/1/2 0:00";
+            for (int i = 0; evs != null && i < evs.length(); i++) {
+                org.json.JSONObject e = evs.getJSONObject(i);
+                boolean live;
+                if ("all".equals(mode)) live = true;
+                else if ("off".equals(mode)) live = false;
+                else live = on.contains(e.optString("id"));
+                e.put("start", live ? LIVE_START : OLD_START);
+                e.put("end", live ? LIVE_END : OLD_END);
+            }
+            android.util.Log.i("KonofanWeb", "event patch mode=" + mode + " on=" + on.size());
+            return root.toString().getBytes("UTF-8");
+        } catch (Exception e) {
+            android.util.Log.w("KonofanWeb", "event patch fail " + e);
+            return null;
+        }
     }
 
     private static byte[] readAll(java.io.File f, int max) throws java.io.IOException {
@@ -94,6 +136,7 @@ public class MiniServer {
     }
 
     public MiniServer(File root, int wantPort) {
+        rootStatic = root;
         this.root = root;
         this.wantPort = wantPort;
     }
@@ -250,6 +293,16 @@ public class MiniServer {
             try {
                 path = URLDecoder.decode(path, "UTF-8");
             } catch (Exception ignored) { }
+
+            // 活动管理：按 config.json 的 eventMode/enabledEvents 改写 questx59.json 的活动时间窗
+            String pathOnly = path.contains("?") ? path.substring(0, path.indexOf('?')) : path;
+            if ("/yuanban/master/questx59.json".equals(pathOnly)) {
+                byte[] body = eventPatchedQuestx();
+                if (body != null) {
+                    write(new String(body, "ISO-8859-1"), out, "application/json; charset=utf-8", body.length);
+                    out.flush(); sock.close(); return;
+                }
+            }
 
             if (path.startsWith("/__mgr/")) {
                 String name = path.substring("/__mgr/".length());
