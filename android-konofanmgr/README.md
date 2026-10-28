@@ -17,8 +17,8 @@
 
 | 功能 | 状态 | 实现方式 |
 |---|---|---|
-| ① 礼物 赠送/收回（道具） | ✅ 已验证 | `gifts.json` → 写入**游戏内礼物箱** `save.x.presents`（`{id,t,iid,n,msg,sent,exp,gm}`）→ 游戏首页「礼物」里出现待领取 → 领取后进背包（实测 +7,777 金币，`presents` 1→0、`presentLog` +1） |
-| ① 礼物 赠送/收回（角色卡） | ⚠ 走背包直发 | 角色卡类别码未确认，暂时直接写 `members`；道具走礼物箱 |
+| ① 礼物 赠送/收回（道具，含自定义文案） | ✅ 已验证 | `gifts.json` → 写入**游戏内礼物箱** `save.x.presents`（`{id,t,iid,n,msg,sent,exp,gm}`）→ 游戏首页「礼物」里出现待领取 → 领取后进背包（实测 +7,777 金币，`presents` 1→0、`presentLog` +1） |
+| ① 礼物 赠送/收回（角色卡） | ✅ 已验证 | 类别码 `4 = MEMBER`，同样走礼物箱；领取后 `members[id]` +1（实测 `1002100` 0→1） |
 | ② 彩票号码（手填 / 随机 6 位） | ⚠ 仅写入配置 | 写 `config.lottery`，游戏端可读 `window.__KONOFAN_MGR__.lottery`；彩票 UI 的数据源还没接 |
 | ③ 世界BOSS / 竞技场BOSS 切换 | ⚠ 仅写入配置 | 写 `config.boss`；BOSS 表在离线包里是写死的（`worldboss59` 模块），要换 BOSS 得改那张表 |
 | ④ 卡池轮换 | ✅ 已验证 | `config.activePools` → 过滤 `releasedGachaPools`（只选 1001/1003 后，卡池一览只剩这两个） |
