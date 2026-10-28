@@ -264,6 +264,22 @@ public class MainActivity extends Activity {
                 + "\n\n或者把打包好的 zip 放到 Download 目录，然后点「导入素材」。";
     }
 
+    /** 注入管理器桥（assets/bridge.js），失败不影响游戏本体。 */
+    private void injectBridge() {
+        try {
+            java.io.InputStream is = getAssets().open("bridge.js");
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+            is.close();
+            String js = new String(bos.toByteArray(), "UTF-8");
+            webView.evaluateJavascript(js, v -> Log.i(TAG, "bridge injected: " + v));
+        } catch (Exception e) {
+            Log.w(TAG, "bridge inject failed: " + e);
+        }
+    }
+
     /** 轮询 location.hash：游戏是 hash 路由，真正进入会变成 #/home。 */
     private void schedulePoll() {
         ui.postDelayed(() -> {
@@ -276,6 +292,7 @@ public class MainActivity extends Activity {
                         if (hash.startsWith("#/") && hash.length() > 2) {
                             pageReady = true;
                             hideOverlay();
+                            injectBridge();
                             return;
                         }
                         if (pollTicks > 120) {          // ~60 秒
