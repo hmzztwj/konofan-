@@ -63,3 +63,13 @@ UI 里选「类别」→ 搜名称/ID → 选中即自动填好类型和 ID。
 
 > 武器/饰品领取时由客户端实例化：`equips.push({uid: uid++, t:5|6, id, lv:0, at})`，实测「烈焰弯刀 12431」→ `equips=[{"id":"12431","t":5}]`。
 > 少数类别（如 `16` 极限材料）领取后会走客户端自己的 `$o(e,i)` 分支重新计算，不一定体现在 `items` 里，属游戏逻辑。
+
+## TODO（用户 2026-10-29 指定顺序：先做活动管理，这两项随后再做）
+
+1. **存档备份 / 还原** —— 管理器一键把 `localStorage['oldui59.save']` 导出成文件（`Download/konofan_manager/backup_<时间>.json`）并可随时回滚；游戏侧由 bridge 提供 `POST /__mgr/state` 已有的快照，另加 `/__mgr/restore` 写回。
+2. **首页礼物角标 + 未领数量** —— 在游戏主界面「礼物」按钮上叠加未领取数量角标；数据取 `save.x.presents.length`，由 bridge 注入 CSS/角标。
+
+## 活动管理（进行中）
+
+- 已实现：`MiniServer` 在 `GET /yuanban/master/questx59.json` 时按 `config.eventMode`（`all`/`off`/`enabled`）与 `enabledEvents` 改写每个活动的 `start`/`end`，返回改写后的 JSON（已验证：页面 fetch 该地址返回 `2019/1/1 0:00` 表示已关闭）。
+- **未打通**：冒险 → 活动 界面的卡片列表并不按 `questx59.json` 的活动时间窗过滤（`eventMode=off` 时卡片依旧显示），说明列表数据源另有其处（候选：`quest59-extra.json`、`assets/questx59-*.js` 内嵌数据、或存档里记录的已解锁活动）。下一步要定位该来源。
