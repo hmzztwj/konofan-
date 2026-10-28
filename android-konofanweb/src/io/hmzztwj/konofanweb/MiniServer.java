@@ -64,17 +64,23 @@ public class MiniServer {
             org.json.JSONObject root = new org.json.JSONObject(new String(readAll(f, 32 << 20), "UTF-8"));
             org.json.JSONArray evs = root.optJSONArray("event");
             String LIVE_START = "2020/1/1 0:00", LIVE_END = "2035/12/31 23:59";
-            String OLD_START = "2019/1/1 0:00", OLD_END = "2019/1/2 0:00";
+            org.json.JSONArray keep = new org.json.JSONArray();
+            int onCount = 0;
             for (int i = 0; evs != null && i < evs.length(); i++) {
                 org.json.JSONObject e = evs.getJSONObject(i);
                 boolean live;
                 if ("all".equals(mode)) live = true;
                 else if ("off".equals(mode)) live = false;
                 else live = on.contains(e.optString("id"));
-                e.put("start", live ? LIVE_START : OLD_START);
-                e.put("end", live ? LIVE_END : OLD_END);
+                if (live) {
+                    e.put("start", LIVE_START);
+                    e.put("end", LIVE_END);
+                    keep.put(e);
+                    onCount++;
+                }
             }
-            android.util.Log.i("KonofanWeb", "event patch mode=" + mode + " on=" + on.size());
+            root.put("event", keep);
+            android.util.Log.i("KonofanWeb", "event filter mode=" + mode + " keep=" + onCount + "/" + (evs == null ? 0 : evs.length()));
             return root.toString().getBytes("UTF-8");
         } catch (Exception e) {
             android.util.Log.w("KonofanWeb", "event patch fail " + e);
@@ -302,6 +308,28 @@ public class MiniServer {
                     write(new String(body, "ISO-8859-1"), out, "application/json; charset=utf-8", body.length);
                     out.flush(); sock.close(); return;
                 }
+            }
+
+            if ("/__mgr/events".equals(pathOnly)) {
+                try {
+                    java.io.File qf = new java.io.File(rootForPatch(), "yuanban/master/questx59.json");
+                    org.json.JSONObject rj = new org.json.JSONObject(new String(readAll(qf, 32 << 20), "UTF-8"));
+                    org.json.JSONArray arr = rj.optJSONArray("event");
+                    org.json.JSONArray outArr = new org.json.JSONArray();
+                    for (int i = 0; arr != null && i < arr.length(); i++) {
+                        org.json.JSONObject e = arr.getJSONObject(i);
+                        org.json.JSONObject o = new org.json.JSONObject();
+                        o.put("id", e.optString("id"));
+                        o.put("name", e.optString("name"));
+                        o.put("type", e.optString("type"));
+                        outArr.put(o);
+                    }
+                    byte[] b = outArr.toString().getBytes("UTF-8");
+                    write(new String(b, "ISO-8859-1"), out, "application/json; charset=utf-8", b.length);
+                } catch (Exception e) {
+                    sendError(out, 500, "events fail", path);
+                }
+                out.flush(); sock.close(); return;
             }
 
             if (path.startsWith("/__mgr/")) {
