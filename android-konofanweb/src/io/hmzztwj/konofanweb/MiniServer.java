@@ -32,6 +32,36 @@ public class MiniServer {
     private int port;
     private final ExecutorService pool = Executors.newCachedThreadPool();
     /** 最近 404 的路径，供外壳的“加载超时”诊断面板显示。 */
+    /** 管理器共享目录：/sdcard/Download/konofan_manager（两个 App 都用 targetSdk 29，可直接读写） */
+    public static java.io.File mgrDir() {
+        java.io.File d = new java.io.File(android.os.Environment.getExternalStorageDirectory(),
+                "Download/konofan_manager");
+        if (!d.exists()) d.mkdirs();
+        return d;
+    }
+
+    private static byte[] readAll(java.io.File f, int max) throws java.io.IOException {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        java.io.FileInputStream fis = new java.io.FileInputStream(f);
+        byte[] buf = new byte[8192];
+        int n, total = 0;
+        while ((n = fis.read(buf)) > 0 && total < max) { bos.write(buf, 0, n); total += n; }
+        fis.close();
+        return bos.toByteArray();
+    }
+
+    private static void write(String s, OutputStream out, String type, int len) throws java.io.IOException {
+        String CRLF = "" + (char) 13 + (char) 10;
+        String head = "HTTP/1.1 200 OK" + CRLF
+                + "Content-Type: " + type + CRLF
+                + "Content-Length: " + len + CRLF
+                + "Cache-Control: no-store" + CRLF
+                + "Access-Control-Allow-Origin: *" + CRLF
+                + "Connection: close" + CRLF + CRLF;
+        out.write(head.getBytes("ISO-8859-1"));
+        if (len > 0) out.write(s.getBytes("ISO-8859-1"));
+    }
+
     private final java.util.Deque<String> misses = new java.util.concurrent.ConcurrentLinkedDeque<>();
 
     public java.util.List<String> recentMisses() {
@@ -153,6 +183,45 @@ public class MiniServer {
                 int qi = reqPath.indexOf('?');
                 if (qi >= 0) reqPath = reqPath.substring(0, qi);
                 android.util.Log.i("KonofanWeb", "rpc " + method + " " + reqPath + " len=" + got);
+                try {
+                    if ("/__mgr/state".equals(reqPath)) {
+                        java.io.FileOutputStream fo = new java.io.FileOutputStream(
+                                new java.io.File(mgrDir(), "state.json"));
+                        fo.write(body, 0, got); fo.close();
+                        write("{\"ok\":true}", out, "application/json; charset=utf-8", 11);
+                        out.flush(); sock.close(); return;
+                    }
+                    if ("/__mgr/ack".equals(reqPath)) {
+                        // 管理器礼物已被消费：按 seq 从 gifts.json 里删掉
+                        java.io.File gf = new java.io.File(mgrDir(), "gifts.json");
+                        if (gf.isFile()) {
+                            String txt = new String(readAll(gf, 1 << 20), "UTF-8");
+                            String ack = new String(body, 0, got, "UTF-8");
+                            java.util.List<Long> done = new java.util.ArrayList<>();
+                            try {
+                                org.json.JSONObject aj = new org.json.JSONObject(ack);
+                                org.json.JSONArray arr = aj.optJSONArray("seqs");
+                                for (int i = 0; arr != null && i < arr.length(); i++) done.add(arr.getLong(i));
+                            } catch (Exception ignored) { }
+                            try {
+                                org.json.JSONObject gj = new org.json.JSONObject(txt);
+                                org.json.JSONArray ga = gj.optJSONArray("gifts");
+                                org.json.JSONArray keep = new org.json.JSONArray();
+                                for (int i = 0; ga != null && i < ga.length(); i++) {
+                                    org.json.JSONObject o = ga.getJSONObject(i);
+                                    if (!done.contains(o.optLong("seq", -1))) keep.put(o);
+                                }
+                                gj.put("gifts", keep);
+                                java.io.FileOutputStream fo = new java.io.FileOutputStream(gf);
+                                fo.write(gj.toString().getBytes("UTF-8")); fo.close();
+                            } catch (Exception ignored) { }
+                        }
+                        write("{\"ok\":true}", out, "application/json; charset=utf-8", 11);
+                        out.flush(); sock.close(); return;
+                    }
+                } catch (Exception e) {
+                    android.util.Log.w("KonofanWeb", "mgr post fail " + e);
+                }
                 byte[] resp = ("{\"status\":0,\"data\":{},\"result\":{},\"error\":null}")
                         .getBytes("UTF-8");
                 String CRLF = "" + (char) 13 + (char) 10;
@@ -181,6 +250,19 @@ public class MiniServer {
             try {
                 path = URLDecoder.decode(path, "UTF-8");
             } catch (Exception ignored) { }
+
+            if (path.startsWith("/__mgr/")) {
+                String name = path.substring("/__mgr/".length());
+                if (name.contains("..") || name.contains("/")) { sendError(out, 400, "Bad Request", path); sock.close(); return; }
+                java.io.File f = new java.io.File(mgrDir(), name);
+                if (!f.isFile()) {
+                    write("{\"ok\":false}", out, "application/json; charset=utf-8", 12);
+                    out.flush(); sock.close(); return;
+                }
+                byte[] data = readAll(f, 8 << 20);
+                write(new String(data, "ISO-8859-1"), out, "application/json; charset=utf-8", data.length);
+                out.flush(); sock.close(); return;
+            }
 
             // 站点自带 Service Worker（pwa-sw.js）会把 assets 缓存起来，
             // 改过的数据补丁永远不生效。本地服务下没必要缓存，直接返回空壳 SW。
