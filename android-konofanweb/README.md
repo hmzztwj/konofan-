@@ -86,6 +86,25 @@ cd /f/python_work/逆向/android/konofanweb && bash build_apk.sh
 | 战斗 | ✅ 1/3 WAVE、倒计时、AUTO/倍速/菜单、SP 槽、4 个技能键、敌我血条、伤害数字 |
 | 战斗结算 | ✅ 胜负结算页（再战 / 返回关卡 / 前往成员强化） |
 
+## 卡池一览是空白的？—— 已修（横幅补丁 + SW 空壳）
+
+**症状**：召唤 → 卡池一览，几条格子长得一模一样、没有任何池名。
+
+**根因（两层）**
+1. 站点数据里 37 个卡池的 `banner` 全指向同一张占位图 `sprite/webp/TitleBG__13d146.webp`（画面上印「ゲームタイトル配置」）；渲染代码把格子当**纯图片**画，`label` 只用于无障碍，所以看不到字。
+2. 站点注册了 Service Worker（`pwa-sw.js`，cache `oldui-pwa-shell-*`），改过的 `local-rpc.js` 会被缓存住，改了也不生效。
+
+**修法**
+- `tools/patch_gacha_banners.py`：Pillow 生成 37 张 801×481 横幅（池名 + 开放信息 + ID），输出到 `site/yuanban/gacha/banner/pool_<id>.webp`；并在 `local-rpc.js` 的 `poolsCache = list;` 前注入
+  ```js
+  for (var _pi = 0; _pi < list.length; _pi++) list[_pi].banner = 'gacha/banner/pool_' + list[_pi].id + '.webp';
+  ```
+  原文件备份为 `local-rpc.js.bak`，`--restore` 可还原。
+- App 侧：MiniServer 对 `/pwa-sw.js` 返回**空壳 SW**（`skipWaiting` + `clients.claim` + 空 fetch），并对 `.js`/`.json` 返回 `Cache-Control: no-store` ⇒ 以后改数据补丁不用再手动清缓存。
+
+**已备好**：`gacha-banners.zip`（391 KB）= 37 张 webp + 补丁脚本，解到 `site/` 根目录即可。
+
+
 ## 已知问题
 
 | 现象 | 原因 |
