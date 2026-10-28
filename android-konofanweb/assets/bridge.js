@@ -17,90 +17,112 @@
     try { localStorage.setItem(SAVE, JSON.stringify(s)); return true; } catch (e) { return false; }
   }
 
-  // ---------- 礼物：一次性消费 ----------
-  function applyGifts(payload) {
-    var list = (payload && payload.gifts) || [];
-    if (!list.length) return false;
-    var ctx = window.__kfctx;
-    var s = (ctx && ctx.W) ? ctx.W() : readSave();
-    if (!s || typeof s !== 'object') s = readSave();
-    s.items = s.items || {};
-    s.members = s.members || [];
-    var applied = [];
+  // ---------- 礼物：一律写进游戏内礼物箱，由玩家手动领取 ----------
+  // gifts.json 里每条形如 {"seq":1,"type":"item|member","id":"1:1","count":7777,"msg":"自定义文案"}
+  // 类型 → 礼物箱类别码（客户端 B 枚举）：item 用 "类别:编号" 的类别；member = 4（MEMBER）
+  var MEMBER_TYPE = 4;
+  var DAY = 86400000;
+
+  function presentEntry(s, cat, iid, n, msg, fixedId) {
     s.x = s.x || {};
     s.x.presents = s.x.presents || [];
     s.x.pseq = Number(s.x.pseq || 1);
-    var DAY = 86400000;
+    s.x.presents.unshift({
+      id: fixedId || (s.x.pseq++),
+      t: cat,
+      iid: String(iid),
+      n: n,
+      msg: msg || '管理员发放',
+      sent: Date.now(),
+      exp: Date.now() + 90 * DAY,
+      gm: true
+    });
+  }
+
+  function recallEntry(s, cat, iid, need) {
+    var left = need;
+    var list = (s.x && s.x.presents) || [];
+    for (var i = 0; i < list.length && left > 0; i++) {
+      var pz = list[i];
+      if (String(pz.t) === String(cat) && String(pz.iid) === String(iid)) {
+        var take = Math.min(Number(pz.n || 0), left);
+        pz.n = Number(pz.n || 0) - take;
+        left -= take;
+        if (pz.n <= 0) { list.splice(i, 1); i--; }
+      }
+    }
+    if (left > 0) {
+      if (String(cat) === String(MEMBER_TYPE)) {
+        var have = Number((s.members || {})[String(iid)] || 0);
+        s.members = s.members || {};
+        s.members[String(iid)] = Math.max(0, have - left);
+        if (s.members[String(iid)] === 0) delete s.members[String(iid)];
+      } else {
+        var key = cat + ':' + iid;
+        s.items = s.items || {};
+        s.items[key] = Math.max(0, Number(s.items[key] || 0) - left);
+      }
+    }
+  }
+
+  function applyGifts(payload) {
+    var list = (payload && payload.gifts) || [];
+    if (!list.length) return false;
+    var s = readSave();
+    s.items = s.items || {};
+    s.members = s.members || {};
+    var applied = [];
 
     list.forEach(function (g) {
-      var seq = g.seq, done = false;
-      if (g.type === 'item') {
-        var k = String(g.id);                    // 形如 "1:1" → 类别 1、编号 1
-        var parts = k.split(':');
-        var cat = parseInt(parts[0], 10), iid = parts[1] || '0';
-        var n = Number(g.count || 0);
-        if (!(cat > 0)) { done = false; }
-        else if (n > 0) {
-          // 走游戏自己的礼物箱：x.presents 里插一条，玩家在首页「礼物」里领取
-          s.x.presents.unshift({
-            id: s.x.pseq++,
-            t: cat,
-            iid: String(iid),
-            n: n,
-            msg: (g.msg || '管理员发放'),
-            sent: Date.now(),
-            exp: Date.now() + 90 * DAY,
-            gm: true
-          });
-          done = true;
-        } else {
-          // 收回：先扣未领取的礼物箱条目，再扣背包
-          var need = -n;
-          for (var i = 0; i < s.x.presents.length && need > 0; i++) {
-            var pz = s.x.presents[i];
-            if (String(pz.t) === String(cat) && String(pz.iid) === String(iid)) {
-              var take = Math.min(Number(pz.n || 0), need);
-              pz.n = Number(pz.n || 0) - take;
-              need -= take;
-              if (pz.n <= 0) { s.x.presents.splice(i, 1); i--; }
-            }
-          }
-          if (need > 0) {
-            var cur = Number(s.items[k] || 0);
-            s.items[k] = Math.max(0, cur - need);
-          }
-          done = true;
-        }
-      } else if (g.type === 'member') {
-        var mid = String(g.id);
-        var isMap = !Array.isArray(s.members) && typeof s.members === 'object';
-        if (Number(g.count || 0) > 0) {
-          if (isMap) s.members[mid] = (Number(s.members[mid] || 0) || 1);
-          else if (s.members.indexOf(mid) < 0) s.members.push(mid);
-          done = true;
-        } else {
-          if (isMap) delete s.members[mid];
-          else s.members = s.members.filter(function (v) { return String(v) !== mid; });
-          done = true;
-        }
-      } else if (g.type === 'reset') {
-        // 清空存档（危险操作，管理器里要二次确认）
+      var seq = g.seq;
+      var n = Number(g.count || 0);
+      var cat, iid;
+      if (g.type === 'reset') {
         try { localStorage.removeItem(SAVE); } catch (e) {}
-        return true;
+        applied.push(seq);
+        return;
       }
-      if (done) applied.push(seq);
+      if (g.type === 'member') {
+        cat = MEMBER_TYPE;
+        iid = String(g.id);
+      } else {
+        var parts = String(g.id).split(':');
+        cat = parseInt(parts[0], 10);
+        iid = parts[1] || '0';
+      }
+      if (!(cat > 0) || !iid) return;
+      if (n > 0) presentEntry(s, cat, iid, n, g.msg, 900000 + Number(seq % 99999));
+      else recallEntry(s, cat, iid, -n);
+      applied.push(seq);
     });
-    var okLive = false;
-    try {
-      if (ctx && ctx.gd) { ctx.gd(s); okLive = true; }
-      if (okLive && ctx.Xm) ctx.Xm();
-    } catch (e) { okLive = false; }
-    if (!okLive) writeSave(s);
-    log('gifts applied ' + applied.join(',') + (okLive ? ' (live)' : ' (ls)'));
-    // 立刻刷新：拖太久游戏会把它内存里的旧存档写回 localStorage，把礼物覆盖掉
-    fetch('/__mgr/ack', { method: 'POST', body: JSON.stringify({ seqs: applied }) })
-      .catch(function () {})
-      .then(function () { setTimeout(function () { location.reload(); }, 50); });
+
+    // 游戏会周期性自动存档（写回它内存里的旧副本），所以连续写几遍再刷新，
+    // 用确定性 id（900000+seq）保证重复写不会产生重复条目。
+    var tries = 0;
+    (function beat() {
+      var cur = readSave();
+      cur.x = cur.x || {};
+      cur.x.presents = (cur.x.presents || []).filter(function (p) {
+        return !(p && p.id >= 900000 && p.gm && p.id < 1000000);
+      });
+      // 把我们这批再塞回去
+      var tmp = { items: {}, members: {} };
+      (payload.gifts || []).forEach(function (g) {
+        if (Number(g.count) <= 0 || g.type === 'reset') return;
+        var cat = g.type === 'member' ? 4 : parseInt(String(g.id).split(':')[0], 10);
+        var iid = g.type === 'member' ? String(g.id) : (String(g.id).split(':')[1] || '0');
+        if (!(cat > 0)) return;
+        presentEntry(cur, cat, iid, Number(g.count), g.msg, 900000 + Number(g.seq % 99999));
+      });
+      writeSave(cur);
+      if (++tries < 12) setTimeout(beat, 150);
+      else {
+        log('gifts applied ' + applied.join(','));
+        fetch('/__mgr/ack', { method: 'POST', body: JSON.stringify({ seqs: applied }) })
+          .catch(function () {});
+        setTimeout(function () { location.reload(); }, 200);
+      }
+    })();
     return true;
   }
 
