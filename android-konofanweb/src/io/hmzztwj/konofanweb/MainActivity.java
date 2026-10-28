@@ -2,289 +2,452 @@ package io.hmzztwj.konofanweb;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.DialogInterface;
 import android.content.Intent;
-import android.content.pm.ActivityInfo;
 import android.graphics.Color;
-import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.ConsoleMessage;
-import android.webkit.CookieManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.List;
+import java.util.Locale;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 /**
- * 外壳：起本地 HTTP 服务托管 site/ → 用 WebView 全屏加载 http://127.0.0.1:port/。
- * 之所以走 127.0.0.1 而不是 file://：客户端把 localhost/127.0.0.1 当作单机模式开关，
- * 而且 ES module、fetch、Service Worker 在 file:// 下都被 Chromium 拦住。
+ * このファン Web 安卓外壳。
+ *
+ * 1) 在 127.0.0.1 起迷你 HTTP 服务，把 site/ 当游戏根目录（file:// 会被 Chromium 的 CORS 拦住）；
+ * 2) WebView 全屏加载 http://127.0.0.1:port/；
+ * 3) 全程盖一层原生状态页：缺素材 / 解压中 / 加载中 / 加载超时 都有明确文字与按钮，
+ *    避免出现「白屏 / 卡在 99%」这种没法自救的状态。
  */
 public class MainActivity extends Activity {
+
     private static final String TAG = "KonofanWeb";
-    private static final int PORT = 8787;
 
-    private WebView webView;
-    private MiniServer server;
+    /** 素材候选目录（相对外部私有目录、/sdcard/Download），按顺序探测。 */
+    private static final String[] SITE_CANDIDATES = {"site", "konofanweb/site", "konofanweb"};
+
     private FrameLayout root;
-    private TextView hint;
+    private WebView webView;
+    private LinearLayout overlay;
+    private TextView statusText;
+    private TextView detailText;
+    private ProgressBar spinner;
+    private Button retryBtn;
+    private Button importBtn;
+
+    private MiniServer server;
+    private String siteRoot;
+    private volatile boolean pageReady = false;
+    private int pollTicks = 0;
     private final Handler ui = new Handler(Looper.getMainLooper());
-
-    /** 候选素材根目录：优先 App 私有外部目录，其次手机公共 Download（可以用文件管理器直接拷进去）。 */
-    private File[] siteCandidates() {
-        java.util.ArrayList<File> list = new java.util.ArrayList<File>();
-        File base = getExternalFilesDir(null);
-        if (base == null) base = getFilesDir();
-        list.add(new File(base, "site"));
-        list.add(new File("/sdcard/Download/konofanweb/site"));
-        list.add(new File("/sdcard/Download/site"));
-        File internal = new File(getFilesDir(), "site");
-        list.add(internal);
-        return list.toArray(new File[0]);
-    }
-
-    private File siteDir() {
-        File[] cands = siteCandidates();
-        for (File f : cands) {
-            if (new File(f, "index.html").isFile()) return f;
-        }
-        return cands[0];
-    }
-
-    /** targetSdk 29 + requestLegacyExternalStorage：在 Android 10 及以下直接可读 /sdcard/Download。 */
-    private void ensureReadPermission() {
-        if (Build.VERSION.SDK_INT >= 23) {
-            if (checkSelfPermission("android.permission.READ_EXTERNAL_STORAGE")
-                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE"}, 1);
-            }
-        }
-    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         hideSystemUi();
 
         root = new FrameLayout(this);
-        root.setBackgroundColor(Color.BLACK);
-        setContentView(root);
-
-        webView = new WebView(this);
-        webView.setBackgroundColor(Color.BLACK);
-        root.addView(webView, new FrameLayout.LayoutParams(
+        setContentView(root, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        hint = new TextView(this);
-        hint.setTextColor(Color.parseColor("#c9d1e0"));
-        hint.setTextSize(15f);
-        hint.setPadding(48, 48, 48, 48);
-        hint.setText("准备中…");
-        root.addView(hint, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        WebView.setWebContentsDebuggingEnabled(true);
-        configureWebView();
-        ensureReadPermission();
-
-        File site = siteDir();
-        if (!site.isDirectory()) site.mkdirs();
-        File index = new File(site, "index.html");
-        if (!index.isFile()) {
-            showSetup(site);
-            return;
-        }
-        startAndLoad(site);
+        buildWebView();
+        buildOverlay();
+        startServerThenLoad();
     }
 
-    private void configureWebView() {
+    // ------------------------------------------------------------------ UI
+
+    private void buildWebView() {
+        webView = new WebView(this);
+        webView.setBackgroundColor(Color.BLACK);
+        WebView.setWebContentsDebuggingEnabled(true);
+
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
-        s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
-        s.setLoadsImagesAutomatically(true);
+        s.setMediaPlaybackRequiresUserGesture(false);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
-        s.setUseWideViewPort(true);
-        s.setLoadWithOverviewMode(true);
-        s.setSupportZoom(false);
-        s.setBuiltInZoomControls(false);
-        s.setJavaScriptCanOpenWindowsAutomatically(true);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        if (Build.VERSION.SDK_INT >= 21) {
-            CookieManager.getInstance().setAcceptCookie(true);
-            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
-        }
+
         webView.setWebViewClient(new WebViewClient() {
             @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                Uri u = request.getUrl();
-                String scheme = u.getScheme() == null ? "" : u.getScheme();
-                if (scheme.equals("http") || scheme.equals("https")) {
-                    String host = u.getHost() == null ? "" : u.getHost();
-                    if (host.equals("127.0.0.1") || host.equals("localhost")) return false;
-                    try {
-                        startActivity(new Intent(Intent.ACTION_VIEW, u));
-                    } catch (Exception ignored) { }
-                    return true;
+            public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
+                String url = req.getUrl().toString();
+                if (url.startsWith("http://127.0.0.1:")) return false;
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, req.getUrl()));
+                } catch (Exception e) {
+                    Log.w(TAG, "no handler for " + url);
                 }
                 return true;
             }
-
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                hint.setVisibility(View.GONE);
-            }
         });
+
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(ConsoleMessage m) {
-                Log.i(TAG, "js " + m.message() + " @" + m.sourceId() + ":" + m.lineNumber());
+                Log.i(TAG, "js " + m.messageLevel() + ": " + m.message()
+                        + " @" + m.sourceId() + ":" + m.lineNumber());
                 return true;
             }
         });
+
+        root.addView(webView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
-    private void startAndLoad(final File site) {
-        hint.setText("正在启动本地服务…");
-        hint.setVisibility(View.VISIBLE);
-        new Thread(new Runnable() {
-            @Override public void run() {
-                try {
-                    server = new MiniServer(site, PORT);
-                    final int port = server.start();
-                    Log.i(TAG, "serving " + site + " on http://127.0.0.1:" + port + "/");
-                    ui.post(new Runnable() {
-                        @Override public void run() {
-                            webView.loadUrl("http://127.0.0.1:" + port + "/");
-                        }
-                    });
-                } catch (Exception e) {
-                    Log.e(TAG, "server start failed", e);
-                    final String msg = String.valueOf(e);
-                    ui.post(new Runnable() {
-                        @Override public void run() {
-                            hint.setText("本地服务启动失败：" + msg);
-                            hint.setVisibility(View.VISIBLE);
-                        }
-                    });
+    private void buildOverlay() {
+        overlay = new LinearLayout(this);
+        overlay.setOrientation(LinearLayout.VERTICAL);
+        overlay.setGravity(Gravity.CENTER);
+        overlay.setBackgroundColor(Color.rgb(18, 20, 26));
+        overlay.setPadding(dp(48), dp(28), dp(48), dp(24));
+
+        TextView title = new TextView(this);
+        title.setText("このファン Web");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(24);
+        title.setGravity(Gravity.CENTER);
+
+        statusText = new TextView(this);
+        statusText.setTextColor(Color.rgb(200, 208, 224));
+        statusText.setTextSize(16);
+        statusText.setGravity(Gravity.CENTER);
+        statusText.setPadding(0, dp(12), 0, dp(10));
+
+        spinner = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        spinner.setIndeterminate(true);
+        spinner.setVisibility(View.GONE);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(320), dp(6));
+        plp.bottomMargin = dp(6);
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        buttons.setGravity(Gravity.CENTER);
+        buttons.setPadding(0, dp(6), 0, dp(10));
+
+        retryBtn = new Button(this);
+        retryBtn.setText("重试");
+        retryBtn.setOnClickListener(v -> startServerThenLoad());
+
+        importBtn = new Button(this);
+        importBtn.setText("导入素材");
+        importBtn.setOnClickListener(v -> showImportDialog());
+
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(dp(130), dp(46));
+        blp.leftMargin = dp(6);
+        blp.rightMargin = dp(6);
+        buttons.addView(retryBtn, blp);
+        buttons.addView(importBtn, blp);
+
+        detailText = new TextView(this);
+        detailText.setTextColor(Color.rgb(126, 136, 156));
+        detailText.setTextSize(12);
+        detailText.setPadding(0, dp(4), 0, dp(4));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.addView(detailText);
+
+        overlay.addView(title);
+        overlay.addView(statusText);
+        overlay.addView(spinner, plp);
+        overlay.addView(buttons);
+        overlay.addView(new View(this), new LinearLayout.LayoutParams(1, 1));
+        overlay.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        root.addView(overlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private void setStatus(String status, String detail, boolean busy) {
+        statusText.setText(status);
+        if (detail != null) detailText.setText(detail);
+        spinner.setVisibility(busy ? View.VISIBLE : View.GONE);
+        retryBtn.setVisibility(busy ? View.GONE : View.VISIBLE);
+        importBtn.setVisibility(busy ? View.GONE : View.VISIBLE);
+        overlay.setVisibility(View.VISIBLE);
+    }
+
+    private void hideOverlay() {
+        overlay.setVisibility(View.GONE);
+    }
+
+    // -------------------------------------------------------------- startup
+
+    private void startServerThenLoad() {
+        pageReady = false;
+        pollTicks = 0;
+        setStatus("正在准备本地服务…", "", true);
+
+        new Thread(() -> {
+            File dir = findSiteDir();
+            if (dir == null) {
+                ui.post(() -> setStatus("还没有游戏数据", missingDetail(), false));
+                return;
+            }
+            siteRoot = dir.getAbsolutePath();
+            try {
+                if (server != null) server.stop();
+                server = new MiniServer(dir, 8787);
+                server.start();
+            } catch (Exception e) {
+                Log.e(TAG, "server failed", e);
+                ui.post(() -> setStatus("本地服务启动失败", String.valueOf(e), false));
+                return;
+            }
+            final String url = "http://127.0.0.1:" + server.getPort() + "/";
+            Log.i(TAG, "serving " + siteRoot + " at " + url);
+            ui.post(() -> {
+                setStatus("正在加载游戏…",
+                        siteRoot + "\n" + countFiles(siteRoot) + " 个文件", true);
+                webView.loadUrl(url);
+                schedulePoll();
+            });
+        }, "server-start").start();
+    }
+
+    private File findSiteDir() {
+        List<File> bases = new ArrayList<>();
+        File priv = getExternalFilesDir(null);
+        if (priv != null) bases.add(priv);
+        bases.add(new File(Environment.getExternalStorageDirectory(), "Download"));
+        for (File base : bases) {
+            for (String sub : SITE_CANDIDATES) {
+                File f = new File(base, sub);
+                if (new File(f, "index.html").isFile()) {
+                    Log.i(TAG, "site root: " + f);
+                    return f;
                 }
             }
-        }, "mini-http-start").start();
+        }
+        return null;
     }
 
-    /** 首次启动：告诉用户把 site 推到哪里（adb push / 文件管理器均可）。 */
-    private void showSetup(final File site) {
-        hint.setVisibility(View.GONE);
-        String path = site.getAbsolutePath();
-        String msg = "还没有游戏数据。\n\n"
-                + "把网页版的数据目录（含 index.html 的那个 site 文件夹）放到：\n\n"
-                + path + "\n\n"
-                + "用电脑执行：\n"
-                + "adb push 本地site/. " + path + "/\n\n"
-                + "或者用手机文件管理器把 site 文件夹整体复制到上面这个位置，然后点「重新加载」。\n\n"
-                + "（数据约 8.5 GB，放完就是完全离线可玩）";
-        new AlertDialog.Builder(this)
-                .setTitle("このファン Web — 初始化")
-                .setMessage(msg)
-                .setPositiveButton("重新加载", new DialogInterface.OnClickListener() {
-                    @Override public void onClick(DialogInterface d, int w) {
-                        File idx = new File(site, "index.html");
-                        if (idx.isFile()) {
-                            hint.setVisibility(View.VISIBLE);
-                            hint.setText("正在启动本地服务…");
-                            startAndLoad(site);
-                        } else {
-                            showSetup(site);
+    private String missingDetail() {
+        File priv = getExternalFilesDir(null);
+        String target = (priv != null ? priv.getAbsolutePath()
+                : "/sdcard/Android/data/io.hmzztwj.konofanweb/files") + "/site";
+        return "把 sqweb_offline 里的 site 目录整个复制到：\n" + target
+                + "\n\n电脑上用 adb 推：\nadb push site/. " + target + "/"
+                + "\n\n或者把打包好的 zip 放到 Download 目录，然后点「导入素材」。";
+    }
+
+    /** 轮询 location.hash：游戏是 hash 路由，真正进入会变成 #/home。 */
+    private void schedulePoll() {
+        ui.postDelayed(() -> {
+            if (pageReady) return;
+            pollTicks++;
+            webView.evaluateJavascript(
+                    "(function(){try{return location.hash||''}catch(e){return 'ERR'}})()",
+                    value -> {
+                        String hash = value == null ? "" : value.replace("\"", "");
+                        if (hash.startsWith("#/") && hash.length() > 2) {
+                            pageReady = true;
+                            hideOverlay();
+                            return;
                         }
+                        if (pollTicks > 120) {          // ~60 秒
+                            onLoadTimeout(hash);
+                            return;
+                        }
+                        if (pollTicks % 10 == 0) {
+                            statusText.setText("正在加载游戏… 已等待 " + (pollTicks / 2) + " 秒");
+                        }
+                        schedulePoll();
+                    });
+        }, 500);
+    }
+
+    private void onLoadTimeout(String hash) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("页面地址：").append(hash.isEmpty() ? "(空)" : hash).append('\n');
+        sb.append("素材目录：").append(siteRoot).append('\n');
+        sb.append("文件数：").append(siteRoot == null ? "-" : countFiles(siteRoot)).append('\n');
+        List<String> missing = server == null ? new ArrayList<>() : server.recentMisses();
+        if (!missing.isEmpty()) {
+            sb.append("\n最近 404：\n");
+            for (int i = 0; i < Math.min(8, missing.size()); i++) {
+                sb.append("  ").append(missing.get(i)).append('\n');
+            }
+            sb.append("\n多半是素材没复制全，重新推一次 site 目录后点重试。");
+        } else {
+            sb.append("\n服务端没记录到 404，可能是素材不完整或版本不匹配。\n点重试，或重新导入素材。");
+        }
+        setStatus("加载超时", sb.toString(), false);
+    }
+
+    // --------------------------------------------------------------- import
+
+    private void showImportDialog() {
+        File dl = new File(Environment.getExternalStorageDirectory(), "Download");
+        List<File> zips = new ArrayList<>();
+        File[] all = dl.listFiles();
+        if (all != null) {
+            for (File f : all) {
+                String n = f.getName().toLowerCase(Locale.ROOT);
+                if (f.isFile() && n.endsWith(".zip")) zips.add(f);
+            }
+        }
+        final List<File> found = zips;
+        String[] items = new String[found.size() + 1];
+        items[0] = "查看手动复制说明";
+        for (int i = 0; i < found.size(); i++) {
+            items[i + 1] = "解压 " + found.get(i).getName()
+                    + "（" + (found.get(i).length() / 1024 / 1024) + " MB）";
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("导入素材")
+                .setItems(items, (d, which) -> {
+                    if (which == 0) {
+                        new AlertDialog.Builder(this)
+                                .setTitle("手动复制")
+                                .setMessage(missingDetail())
+                                .setPositiveButton("知道了", null)
+                                .show();
+                    } else {
+                        importZip(found.get(which - 1));
                     }
                 })
-                .setNegativeButton("退出", new DialogInterface.OnClickListener() {
-                    @Override public void onClick(DialogInterface d, int w) { finish(); }
-                })
-                .setCancelable(false)
+                .setNegativeButton("取消", null)
                 .show();
     }
 
-    private void hideSystemUi() {
-        View decor = getWindow().getDecorView();
-        decor.setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
-        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                WindowManager.LayoutParams.FLAG_FULLSCREEN);
+    private void importZip(File zip) {
+        setStatus("正在解压素材…", zip.getName(), true);
+        new Thread(() -> {
+            File dest = new File(getExternalFilesDir(null), "site");
+            long total = 0;
+            int files = 0;
+            try (ZipFile zf = new ZipFile(zip)) {
+                Enumeration<? extends ZipEntry> en = zf.entries();
+                byte[] buf = new byte[1 << 16];
+                while (en.hasMoreElements()) {
+                    ZipEntry e = en.nextElement();
+                    String name = e.getName();
+                    if (name.startsWith("site/")) name = name.substring(5);
+                    if (name.isEmpty() || name.endsWith("/")) continue;
+                    File out = new File(dest, name);
+                    File parent = out.getParentFile();
+                    if (parent != null && !parent.exists() && !parent.mkdirs()) continue;
+                    try (InputStream in = zf.getInputStream(e);
+                         FileOutputStream os = new FileOutputStream(out)) {
+                        int n;
+                        while ((n = in.read(buf)) > 0) {
+                            os.write(buf, 0, n);
+                            total += n;
+                        }
+                    } catch (Exception ignored) {
+                    }
+                    files++;
+                    if (files % 200 == 0) {
+                        final int f = files;
+                        final long t = total;
+                        ui.post(() -> statusText.setText(
+                                "正在解压素材… " + f + " 个文件 / " + (t >> 20) + " MB"));
+                    }
+                }
+                final int f = files;
+                final long t = total;
+                ui.post(() -> {
+                    setStatus("解压完成", f + " 个文件 / " + (t >> 20) + " MB\n点「重试」进入游戏", false);
+                    startServerThenLoad();
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "unzip failed", e);
+                ui.post(() -> setStatus("解压失败", String.valueOf(e), false));
+            }
+        }, "unzip").start();
     }
 
-    @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
-        super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) hideSystemUi();
+    // ---------------------------------------------------------------- utils
+
+    private int countFiles(String dir) {
+        int[] n = {0};
+        countInto(new File(dir), n, 0);
+        return n[0];
+    }
+
+    private void countInto(File d, int[] n, int depth) {
+        if (depth > 5 || n[0] > 20000) return;
+        File[] list = d.listFiles();
+        if (list == null) return;
+        for (File f : list) {
+            if (f.isDirectory()) countInto(f, n, depth + 1);
+            else n[0]++;
+        }
+    }
+
+    private int dp(int v) {
+        return Math.round(getResources().getDisplayMetrics().density * v);
+    }
+
+    private void hideSystemUi() {
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
     }
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            if (webView != null && webView.canGoBack()) {
-                webView.goBack();
+            if (overlay.getVisibility() == View.VISIBLE) {
+                finish();
                 return true;
             }
-            if (webView != null) {
+            if (webView.canGoBack()) {
+                webView.goBack();
+            } else {
                 new AlertDialog.Builder(this)
                         .setMessage("退出游戏？")
-                        .setPositiveButton("退出", new DialogInterface.OnClickListener() {
-                            @Override public void onClick(DialogInterface d, int w) { finish(); }
-                        })
+                        .setPositiveButton("退出", (d, w) -> finish())
                         .setNegativeButton("继续玩", null)
                         .show();
-                return true;
             }
+            return true;
         }
         return super.onKeyDown(keyCode, event);
     }
 
     @Override
-    protected void onPause() {
-        super.onPause();
-        if (webView != null) webView.onPause();
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (webView != null) webView.onResume();
-    }
-
-    @Override
     protected void onDestroy() {
         if (server != null) server.stop();
-        if (webView != null) {
-            webView.loadUrl("about:blank");
-            webView.destroy();
-            webView = null;
-        }
+        if (webView != null) webView.destroy();
         super.onDestroy();
     }
 }
