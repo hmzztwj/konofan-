@@ -16,7 +16,21 @@
 | 数据层 | 279 个 `MasterData/*.data` 是 **AES-256-CBC + PKCS#7 + 固定 IV**，base64 文本；**密钥已拿到**（见 `docs/02`） |
 | 剧情层 | Utage `AdvImportBook` / `AdvChapterData`，含完整 Excel 式脚本网格（`Command/Arg1/Text/Voice`），本地 5 章可读 |
 
-## 二、密钥（从运行中的进程内存里读出来的，不是猜的）
+## 三、ローカル版クライアント v0.1（`webapp/`）
+
+解出来的数据不是只能看——现在有一个**能玩**的本地客户端：
+
+```bash
+python tools/build_webapp.py   # 生成 data.js + 图片索引
+start webapp/index.html        # 直接双击也行（file://）
+```
+
+已实现：**冒険（43 区域 / 1,083 关卡，通关解锁）・編成（617 张卡里选 3）・回合制战斗（3 WAVE、速度序、通常/技能×2/必杀、SP 共享、敌方 weight AI）・成员图鉴（★4 342 / ★3 202 / ★2 48）**，
+战斗数值全部来自 `member`/`skill_ac`/`skill_sp`/`battle_enemy`/`battle_wave`/`mainquest_stage`，背景与头像是从缓存的 bundle 里导出的真素材。
+
+路线图与已知限制见 [`webapp/README.md`](webapp/README.md)。
+
+## 四、密钥（从运行中的进程内存里读出来的，不是猜的）
 
 ```
 AES-256 key = 851c20916d7a895bc14ceba139e3dc253486b30b858140c41c8a7e9fe99aec72
