@@ -6,3 +6,5 @@ tools/vgmstream/
 *.so
 *.dat
 __pycache__/
+webapp/data.js
+webapp/img/
