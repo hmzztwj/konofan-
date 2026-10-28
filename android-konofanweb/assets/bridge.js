@@ -85,6 +85,12 @@
       if (g.type === 'member') {
         cat = MEMBER_TYPE;
         iid = String(g.id);
+      } else if (g.type === 'weapon') {
+        cat = 5;
+        iid = String(g.id);
+      } else if (g.type === 'accessory') {
+        cat = 6;
+        iid = String(g.id);
       } else {
         var parts = String(g.id).split(':');
         cat = parseInt(parts[0], 10);
@@ -109,8 +115,9 @@
       var tmp = { items: {}, members: {} };
       (payload.gifts || []).forEach(function (g) {
         if (Number(g.count) <= 0 || g.type === 'reset') return;
-        var cat = g.type === 'member' ? 4 : parseInt(String(g.id).split(':')[0], 10);
-        var iid = g.type === 'member' ? String(g.id) : (String(g.id).split(':')[1] || '0');
+        var TYPEMAP = { member: 4, weapon: 5, accessory: 6 };
+        var cat = TYPEMAP[g.type] || parseInt(String(g.id).split(':')[0], 10);
+        var iid = TYPEMAP[g.type] ? String(g.id) : (String(g.id).split(':')[1] || '0');
         if (!(cat > 0)) return;
         presentEntry(cur, cat, iid, Number(g.count), g.msg, 900000 + Number(g.seq % 99999));
       });
