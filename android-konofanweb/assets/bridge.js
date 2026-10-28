@@ -27,13 +27,50 @@
     s.items = s.items || {};
     s.members = s.members || [];
     var applied = [];
+    s.x = s.x || {};
+    s.x.presents = s.x.presents || [];
+    s.x.pseq = Number(s.x.pseq || 1);
+    var DAY = 86400000;
+
     list.forEach(function (g) {
       var seq = g.seq, done = false;
       if (g.type === 'item') {
-        var k = String(g.id);                    // 形如 "1:1"
-        var cur = Number(s.items[k] || 0);
-        s.items[k] = cur + Number(g.count || 0);
-        done = true;
+        var k = String(g.id);                    // 形如 "1:1" → 类别 1、编号 1
+        var parts = k.split(':');
+        var cat = parseInt(parts[0], 10), iid = parts[1] || '0';
+        var n = Number(g.count || 0);
+        if (!(cat > 0)) { done = false; }
+        else if (n > 0) {
+          // 走游戏自己的礼物箱：x.presents 里插一条，玩家在首页「礼物」里领取
+          s.x.presents.unshift({
+            id: s.x.pseq++,
+            t: cat,
+            iid: String(iid),
+            n: n,
+            msg: (g.msg || '管理员发放'),
+            sent: Date.now(),
+            exp: Date.now() + 90 * DAY,
+            gm: true
+          });
+          done = true;
+        } else {
+          // 收回：先扣未领取的礼物箱条目，再扣背包
+          var need = -n;
+          for (var i = 0; i < s.x.presents.length && need > 0; i++) {
+            var pz = s.x.presents[i];
+            if (String(pz.t) === String(cat) && String(pz.iid) === String(iid)) {
+              var take = Math.min(Number(pz.n || 0), need);
+              pz.n = Number(pz.n || 0) - take;
+              need -= take;
+              if (pz.n <= 0) { s.x.presents.splice(i, 1); i--; }
+            }
+          }
+          if (need > 0) {
+            var cur = Number(s.items[k] || 0);
+            s.items[k] = Math.max(0, cur - need);
+          }
+          done = true;
+        }
       } else if (g.type === 'member') {
         var mid = String(g.id);
         var isMap = !Array.isArray(s.members) && typeof s.members === 'object';
