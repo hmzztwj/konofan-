@@ -182,6 +182,25 @@ public class MiniServer {
                 path = URLDecoder.decode(path, "UTF-8");
             } catch (Exception ignored) { }
 
+            // 站点自带 Service Worker（pwa-sw.js）会把 assets 缓存起来，
+            // 改过的数据补丁永远不生效。本地服务下没必要缓存，直接返回空壳 SW。
+            if ("/pwa-sw.js".equals(path)) {
+                String CRLF2 = "" + (char) 13 + (char) 10;
+                byte[] sw = ("self.addEventListener('install',function(e){self.skipWaiting()});" + CRLF2
+                        + "self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim())});" + CRLF2
+                        + "self.addEventListener('fetch',function(){});" + CRLF2).getBytes("UTF-8");
+                String swHead = "HTTP/1.1 200 OK" + CRLF2
+                        + "Content-Type: text/javascript; charset=utf-8" + CRLF2
+                        + "Content-Length: " + sw.length + CRLF2
+                        + "Cache-Control: no-store" + CRLF2
+                        + "Connection: close" + CRLF2 + CRLF2;
+                out.write(swHead.getBytes("ISO-8859-1"));
+                out.write(sw);
+                out.flush();
+                sock.close();
+                return;
+            }
+
             File f = resolve(path);
             android.util.Log.i("KonofanWeb", "req " + method + " " + path);
             if (f == null) {
@@ -251,7 +270,8 @@ public class MiniServer {
             hd.append("Content-Length: ").append(len).append("\r\n");
             hd.append("Accept-Ranges: bytes\r\n");
             if (partial) hd.append("Content-Range: bytes ").append(start).append('-').append(end).append('/').append(total).append("\r\n");
-            hd.append("Cache-Control: max-age=600\r\n");
+            boolean dynamic = f.getName().endsWith(".js") || f.getName().endsWith(".json");
+            hd.append(dynamic ? "Cache-Control: no-store" : "Cache-Control: max-age=600");
             hd.append("Connection: close\r\n\r\n");
             out.write(hd.toString().getBytes(StandardCharsets.ISO_8859_1));
 
