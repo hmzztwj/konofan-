@@ -1,13 +1,29 @@
 # このファン Web —— 安卓壳（手机可玩）
 
-把 `sqweb_offline/site`（别人做的单机版 Web 客户端）装进一个安卓 App：**内置本地 HTTP 服务 + WebView 全屏加载**，装到手机上点开就能玩，不需要电脑、不需要浏览器。
+把 `sqweb_offline/site`（单机版 Web 客户端）装进一个安卓 App：**内置本地 HTTP 服务 + WebView 全屏加载**，装到手机上点开就能玩，不需要电脑、不需要浏览器。
+
+APK 只有 **45 KB**，素材单独放（约 10.8 GB）。
 
 ## 为什么不用 file://
 
-- 客户端用 `location.hostname === 'localhost' || '127.0.0.1'` 判断"单机模式"，`file://` 进不去；
+- 客户端用 `location.hostname === 'localhost' || '127.0.0.1'` 判断「单机模式」，`file://` 进不去；
 - Chromium 在 `file://` 下会以 CORS 拦掉 ES module、`fetch()`、Service Worker。
 
-所以壳里跑了一个最小的静态文件服务（`MiniServer`），监听 `127.0.0.1` 随机端口，WebView 加载 `http://127.0.0.1:<port>/`。顺带支持 Range 请求，视频（webm）能拖动进度。
+所以壳里跑了一个最小的静态文件服务（`MiniServer`），监听 `127.0.0.1:8787`，WebView 加载 `http://127.0.0.1:8787/`。
+**端口固定**很关键：`localStorage`（存档 `oldui59.save`）按 origin 隔离，端口一变存档就"消失"。
+
+## 启动流程（不会出白屏）
+
+```
+启动
+ ├─ 找素材目录（外部私有目录/site → Download/konofanweb/site → Download/site）
+ │    └─ 找不到 → 原生页面：「还没有游戏数据」+ 目标路径 + adb 命令 + [重试][导入素材]
+ ├─ 起服务 → 盖一层「正在加载游戏…」原生遮罩（显示素材路径与文件数）
+ ├─ 每 0.5s 轮询 location.hash，出现 #/xxx 就撤掉遮罩（≈15 秒进主界面）
+ └─ 60 秒还没进 → 「加载超时」+ 最近 404 列表 + [重试][导入素材]
+```
+
+任何一步失败都停在**原生状态页**上，看得见文字、点得到按钮，绝不会只剩一片白。
 
 ## 目录
 
@@ -15,13 +31,14 @@
 android/konofanweb/
 ├── AndroidManifest.xml          # package io.hmzztwj.konofanweb，minSdk 24 / targetSdk 29
 ├── src/io/hmzztwj/konofanweb/
-│   ├── MainActivity.java        # WebView 外壳、沉浸式全屏、返回键、缺素材提示
-│   └── MiniServer.java          # 本地静态服务（GET/HEAD + Range、MIME、防目录穿越）
+│   ├── MainActivity.java        # 启动流程、状态遮罩、zip 导入、返回键
+│   └── MiniServer.java          # 本地静态服务（GET/HEAD + Range、MIME、防目录穿越、404 记录）
 ├── res/values/strings.xml
 ├── res/mipmap-xxxhdpi/ic_launcher.png
 ├── keystore/debug.keystore      # 调试签名（口令都是 android）
 ├── build_apk.sh                 # aapt2 → javac → d8 → zipalign → apksigner
-└── konofanweb.apk               # 产物（约 33 KB，v1/v2/v3 已签名）
+├── push_site.bat                # Windows 一键把 site 推到模拟器/手机
+└── konofanweb.apk               # 产物（约 45 KB，v1/v2/v3 已签名）
 ```
 
 ## 构建
@@ -34,59 +51,57 @@ cd /f/python_work/逆向/android/konofanweb && bash build_apk.sh
 
 注意：aapt2/d8/zipalign 是 Windows 原生程序，**参数里不能有中文路径**，脚本会先复制到 `C:/kwbuild` 再构建。
 
-## 装到手机
+## 装到模拟器 / 手机
 
-1. 安装 `konofanweb.apk`（`adb install -r konofanweb.apk`，或直接拷到手机点开）。
-2. 放素材，二选一：
-   - **adb**：`adb push sqweb_offline/site/. /sdcard/Android/data/io.hmzztwj.konofanweb/files/site/`
-   - **文件管理器**（无需 adb）：把 `site` 整个文件夹拷到手机 `Download/konofanweb/site/`，App 会自动优先用这个目录（需要授予"存储"权限；Android 13+ 因权限收紧，仍建议用 adb 或数据线方式）。
-3. 打开 App。首屏是作者做的启动动画，之后进游戏。
+1. `adb install -r konofanweb.apk`（或把 APK 拷进手机点开安装）。
+2. 放素材，三选一：
+   - **一键脚本**：电脑上双击 `push_site.bat`（内部就是 `adb push`，约 5 分钟 / 40 MB/s）；
+   - **adb 手打**：`adb push sqweb_offline/site/. /sdcard/Android/data/io.hmzztwj.konofanweb/files/site/`
+   - **手机端 zip 导入**：把 site 打包成 zip 放进 `Download/`，打开 App 点「导入素材」，App 自己解压（边解压边显示进度）。
+3. 打开 App，看到「正在加载游戏…」约 15 秒后进主界面。
 
-素材约 **9.1 GB**（`site/` 里 `yuanban/packs` 6.7 GB + `sucai` 2.3 GB 是大头），手机要留够空间。
-
-App 找素材的顺序：`外部私有目录/site` → `/sdcard/Download/konofanweb/site` → `/sdcard/Download/site` → `内部目录/site`，取第一个含 `index.html` 的。
+素材约 **10.8 GB**（`yuanban/packs` 6.7 GB + `sucai` 2.3 GB 是大头），手机要留够空间。
+**卸载 App 会连同这个目录一起删掉**，重装后必须重新推素材。
 
 ## 已实现
 
-- 横屏全屏（沉浸式，隐藏状态栏/导航栏）、常亮
-- 本地服务：Range（视频拖动）、SPA 回落（无扩展名 → index.html）、目录穿越防护
-- 返回键：先网页后退，到根再弹"退出游戏？"
-- console.log/warn/error 全部转到 logcat：`adb logcat -s KonofanWeb`
-- 缺 `index.html` 时弹窗直接显示目标路径与 adb 命令
+- 固定端口本地服务：Range（webm 拖动）、无扩展名自动补 `.json`、严格 404、POST 统一回空 RPC（消除满屏「服务器出错 405」）
+- 启动状态遮罩 + 60 秒超时诊断（含最近 404 列表）
+- zip 导入素材（`Download/*.zip`，支持 `site/` 前缀，带进度）
+- 横屏全屏（沉浸式）、常亮；返回键先网页后退，到根再弹「退出游戏？」
+- console.log/warn/error 转到 logcat：`adb logcat -s KonofanWeb`
+- WebView 远程调试已开（`chrome://inspect` / CDP）
 
-## 已验证（MuMu，Android 15 / x86_64，Chrome 110 WebView）
+## 已验证（MuMu 12，Android 15 / x86_64，Chrome 110 WebView）
 
-- 安装 → 启动 → 启动动画 → 公告弹窗 → **主界面**（冒险者头像、等级、体力 10/10、金币 2000 万、左右两列功能入口、底部 7 个导航）
-- **冒险 → 主线任务 → 1 部 → 1 章 → 1 章-1 → 关卡详情 → 队伍编成（战力 3384/推荐 1200）→ 出发 → 战斗场景**
-  （3 WAVE、计时 1:47、AUTO/倍速/菜单、技能栏 双重吸取之触 5% / 创造之水 / 束缚 / 攻击、敌人卷心菜、[启程]和真 切入演出）全部正常
-- 素材 10.8 GB（10,821 个文件）推送后可完全离线跑，无 404
-- 局域网/本机服务：Range 请求正常（webm 可拖动）、`master/xxx` 无扩展名自动补 `.json`
+| 场景 | 结果 |
+|---|---|
+| 无素材启动 | ✅ 原生页「还没有游戏数据」+ 目标路径 + adb 命令 + 按钮（**不是白屏**） |
+| 有素材启动 | ✅ 「正在加载游戏…」遮罩（显示 10135 个文件）→ 约 15 秒自动撤罩 → 公告 + 主界面 |
+| 重启后存档 | ✅ 修好固定端口后，`exp` 等改动跨重启保留 |
+| 主界面 | ✅ 冒险者、等级、体力 10/10、金币 2000 万、左右两列入口、底部 7 导航 |
+| 冒险 → 主线任务 | ✅ 1 部 / 2 部、章节解锁条件 |
+| 1 章-1 → 关卡详情 | ✅ 敌人卷心菜+狼、掉落、体力 10→5、跳过券 |
+| 队伍编成 | ✅ 前排 3 人、后排「等级 8 后解放」、综合战力、推荐战力 1200 |
+| 战斗 | ✅ 1/3 WAVE、倒计时、AUTO/倍速/菜单、SP 槽、4 个技能键、敌我血条、伤害数字 |
+| 战斗结算 | ✅ 胜负结算页（再战 / 返回关卡 / 前往成员强化） |
 
-### 已知问题
+## 已知问题
 
-| 现象 | 原因 | 处理 |
-|---|---|---|
-| `教团招募` 小窗报 `Cannot read properties of undefined (reading 'guild')` | 与服务器强相关的功能，单机 RPC 未实现该接口 | 无视，或后续在本地 RPC 里补桩 |
-| 点「挑战」提示战力不足后无反应 | 队伍战力 < 关卡推荐战力（游戏自身的门槛） | 升级/强化后再来，或存档里调 `mstate[*].exp`（会同步提升等级） |
-| 存档里没有默认出战队伍 | `save.party = null` | 进一次「队伍编成」选出战队，或手动置 `save.party = 0` |
-| 素材没放全会卡在 99% | 客户端要校验全部 pack | 用 `push_site.bat` 推全量 |
+| 现象 | 原因 |
+|---|---|
+| 主页「教团招募」小窗报 `reading 'guild'` | 纯服务端功能，单机版没有，关掉即可 |
+| 点「挑战」没反应 / 退回主页 | 游戏自身门槛：综合战力 < 推荐战力时按钮禁用；队伍为空（`save.party` 为 null）时退回主页 |
+| 1 章-1 初始战力 1185 < 推荐 1200 | 游戏平衡，去「角色 → 强化」吃经验书升到 Lv.20+ 即可 |
+| 首次进战斗要下载素材包 | 正常，战斗场景素材按需加载（本地服务，秒级） |
 
-### 调试
-
-开了 `WebView.setWebContentsDebuggingEnabled(true)`，可以接 CDP：
+## 调试
 
 ```bash
-ADB=/f/android-sdk/platform-tools/adb.exe
-PID=$($ADB -s 127.0.0.1:16384 shell pidof io.hmzztwj.konofanweb | tr -d "
-")
-$ADB -s 127.0.0.1:16384 forward tcp:9223 localabstract:webview_devtools_remote_$PID
-python tools/cdp.py eval "location.hash"
-python tools/cdp.py tap 669 538          # 用可信鼠标事件点按（CSS 像素）
-python tools/cdp.py shot out/shot.png
+adb logcat -s KonofanWeb                      # 服务端请求 + JS 控制台
+adb forward tcp:9223 localabstract:webview_devtools_remote_<pid>
+curl http://127.0.0.1:9223/json               # 注意：只有 /json，没有 /json/list
+python tools/cdp.py eval "location.hash"      # 见仓库 tools/cdp.py
 ```
 
-注意：MuMu 里 `adb shell input tap` 对 WebView 无效（页面只吃鼠标事件），要用 CDP 的 `Input.dispatchMouseEvent`。
-
-## 版权
-
-游戏素材与 Web 客户端均为原作者 / 官方版权物，本壳只做本地封装，**仅供自己离线游玩，不要公开分发**。
+MuMu 下 `adb shell input tap` 对 WebView **无效**（页面只吃鼠标事件），必须用 CDP 的 `Input.dispatchMouseEvent`。
