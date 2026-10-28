@@ -43,6 +43,138 @@ public class MiniServer {
 
     private static File rootForPatch() { return rootStatic; }
 
+    private static String lastApplied = "";
+
+    /** 把活动开关落到磁盘上的数据文件（写前备份一次 .full.json）：questx59.json 的 event[]、story/index.json 的 story_event[]。
+     *  这样不依赖任何 HTTP 拦截，游戏读文件就是过滤后的结果。 */
+    private static synchronized void applyEventPolicyToDisk() {
+        try {
+            java.io.File cfg = new java.io.File(mgrDir(), "config.json");
+            if (!cfg.isFile()) return;
+            String cfgText = new String(readAll(cfg, 1 << 20), "UTF-8");
+            org.json.JSONObject c = new org.json.JSONObject(cfgText);
+            String mode = c.optString("eventMode", "");
+            org.json.JSONArray onArr = c.optJSONArray("enabledEvents");
+            StringBuilder sb = new StringBuilder(mode).append('|');
+            java.util.Set<String> on = new java.util.HashSet<>();
+            for (int i = 0; onArr != null && i < onArr.length(); i++) {
+                String id = onArr.getString(i);
+                on.add(id);
+                sb.append(id).append(',');
+            }
+            String sig = sb.toString();
+            if (sig.equals(lastApplied)) return;
+            lastApplied = sig;
+
+            java.io.File site = rootForPatch();
+            if (site == null) return;
+            java.io.File qx = new java.io.File(site, "yuanban/master/questx59.json");
+            java.io.File qxFull = new java.io.File(site, "yuanban/master/questx59.full.json");
+            if (qx.isFile()) {
+                if (!qxFull.exists()) copyFile(qx, qxFull);
+                java.io.File src = qxFull.isFile() ? qxFull : qx;
+                org.json.JSONObject root = new org.json.JSONObject(new String(readAll(src, 64 << 20), "UTF-8"));
+                org.json.JSONArray evs = root.optJSONArray("event");
+                org.json.JSONArray keep = new org.json.JSONArray();
+                for (int i = 0; evs != null && i < evs.length(); i++) {
+                    org.json.JSONObject e = evs.getJSONObject(i);
+                    boolean live = eventLive(mode, on, e.optString("id"));
+                    if (live) {
+                        e.put("start", "2020/1/1 0:00");
+                        e.put("end", "2035/12/31 23:59");
+                        keep.put(e);
+                    }
+                }
+                root.put("event", keep);
+                writeFile(qx, root.toString().getBytes("UTF-8"));
+                android.util.Log.i("KonofanWeb", "disk patch questx mode=" + mode + " keep=" + keep.length());
+            }
+
+            java.io.File si = new java.io.File(site, "yuanban/story/index.json");
+            java.io.File siFull = new java.io.File(site, "yuanban/story/index.full.json");
+            if (si.isFile()) {
+                if (!siFull.exists()) copyFile(si, siFull);
+                java.io.File src = siFull.isFile() ? siFull : si;
+                org.json.JSONObject root = new org.json.JSONObject(new String(readAll(src, 96 << 20), "UTF-8"));
+                org.json.JSONArray evs = root.optJSONArray("story_event");
+                org.json.JSONArray keep = new org.json.JSONArray();
+                for (int i = 0; evs != null && i < evs.length(); i++) {
+                    org.json.JSONObject e = evs.getJSONObject(i);
+                    String eid = e.optString("event_id", e.optString("unlock_event_id", ""));
+                    if (eid.isEmpty() || eventLive(mode, on, eid)) keep.put(e);
+                }
+                root.put("story_event", keep);
+                writeFile(si, root.toString().getBytes("UTF-8"));
+                android.util.Log.i("KonofanWeb", "disk patch story mode=" + mode + " keep=" + keep.length());
+            }
+        } catch (Exception e) {
+            android.util.Log.w("KonofanWeb", "apply event policy fail " + e);
+        }
+    }
+
+    private static void writeFile(java.io.File f, byte[] data) throws java.io.IOException {
+        java.io.FileOutputStream fo = new java.io.FileOutputStream(f);
+        try { fo.write(data); } finally { fo.close(); }
+    }
+
+    private static void copyFile(java.io.File a, java.io.File b) throws java.io.IOException {
+        writeFile(b, readAll(a, 96 << 20));
+    }
+
+    /** 读取配置里的活动开关（mode: all/off/enabled）；没有配置返回 null 表示不干预。 */
+    private static String[] eventPolicy() {
+        try {
+            java.io.File cfg = new java.io.File(mgrDir(), "config.json");
+            if (!cfg.isFile()) return null;
+            org.json.JSONObject c = new org.json.JSONObject(new String(readAll(cfg, 1 << 20), "UTF-8"));
+            String mode = c.optString("eventMode", "");
+            if (mode.isEmpty()) return null;
+            org.json.JSONArray arr = c.optJSONArray("enabledEvents");
+            java.util.List<String> on = new java.util.ArrayList<>();
+            for (int i = 0; arr != null && i < arr.length(); i++) on.add(arr.getString(i));
+            return new String[]{mode, new org.json.JSONArray(on).toString()};
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean eventLive(String mode, java.util.Set<String> on, String id) {
+        if ("all".equals(mode)) return true;
+        if ("off".equals(mode)) return false;
+        return on.contains(id);
+    }
+
+    /** 活动剧情：story/index.json 里 story_event 只保留已开启活动对应的条目。 */
+    private static byte[] storyPatchedIndex() {
+        try {
+            android.util.Log.i("KonofanWeb", "story handler hit root=" + rootForPatch());
+            String[] pol = eventPolicy();
+            android.util.Log.i("KonofanWeb", "story policy=" + (pol == null ? "null" : pol[0]));
+            if (pol == null) return null;
+            String mode = pol[0];
+            java.util.Set<String> on = new java.util.HashSet<>();
+            org.json.JSONArray arr = new org.json.JSONArray(pol[1]);
+            for (int i = 0; i < arr.length(); i++) on.add(arr.getString(i));
+
+            java.io.File f = new java.io.File(rootForPatch(), "yuanban/story/index.json");
+            if (!f.isFile()) return null;
+            org.json.JSONObject root = new org.json.JSONObject(new String(readAll(f, 64 << 20), "UTF-8"));
+            org.json.JSONArray evs = root.optJSONArray("story_event");
+            org.json.JSONArray keep = new org.json.JSONArray();
+            for (int i = 0; evs != null && i < evs.length(); i++) {
+                org.json.JSONObject e = evs.getJSONObject(i);
+                String eid = e.optString("event_id", e.optString("unlock_event_id", ""));
+                if (eid.isEmpty() || eventLive(mode, on, eid)) keep.put(e);
+            }
+            root.put("story_event", keep);
+            android.util.Log.i("KonofanWeb", "story filter mode=" + mode + " keep=" + keep.length() + "/" + (evs == null ? 0 : evs.length()));
+            return root.toString().getBytes("UTF-8");
+        } catch (Exception e) {
+            android.util.Log.w("KonofanWeb", "story filter fail " + e);
+            return null;
+        }
+    }
+
     /** 读取管理器配置并对 questx59.json 的活动生效时间做改写；没有配置就返回 null（走原文件）。 */
     private static byte[] eventPatchedQuestx() {
         try {
@@ -302,6 +434,14 @@ public class MiniServer {
 
             // 活动管理：按 config.json 的 eventMode/enabledEvents 改写 questx59.json 的活动时间窗
             String pathOnly = path.contains("?") ? path.substring(0, path.indexOf('?')) : path;
+            if ("/yuanban/story/index.json".equals(pathOnly)) {
+                byte[] sbody = storyPatchedIndex();
+                if (sbody != null) {
+                    write(new String(sbody, "ISO-8859-1"), out, "application/json; charset=utf-8", sbody.length);
+                    out.flush(); sock.close(); return;
+                }
+            }
+
             if ("/yuanban/master/questx59.json".equals(pathOnly)) {
                 byte[] body = eventPatchedQuestx();
                 if (body != null) {
@@ -330,6 +470,10 @@ public class MiniServer {
                     sendError(out, 500, "events fail", path);
                 }
                 out.flush(); sock.close(); return;
+            }
+
+            if ("/__mgr/config.json".equals(pathOnly)) {
+                applyEventPolicyToDisk();
             }
 
             if (path.startsWith("/__mgr/")) {
