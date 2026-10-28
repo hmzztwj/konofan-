@@ -31,6 +31,12 @@ public class MiniServer {
     private volatile boolean running;
     private int port;
     private final ExecutorService pool = Executors.newCachedThreadPool();
+    /** 最近 404 的路径，供外壳的“加载超时”诊断面板显示。 */
+    private final java.util.Deque<String> misses = new java.util.concurrent.ConcurrentLinkedDeque<>();
+
+    public java.util.List<String> recentMisses() {
+        return new java.util.ArrayList<>(misses);
+    }
 
     private static final Map<String, String> MIME = new HashMap<>();
 
@@ -64,7 +70,17 @@ public class MiniServer {
 
     public synchronized int start() throws IOException {
         if (running) return port;
-        server = new ServerSocket(0, 256, InetAddress.getByName("127.0.0.1"));
+        // 端口固定，origin 才稳定 —— localStorage 按 origin 隔离，换端口等于换存档。
+        ServerSocket ss = null;
+        if (wantPort > 0) {
+            try {
+                ss = new ServerSocket(wantPort, 256, InetAddress.getByName("127.0.0.1"));
+            } catch (IOException busy) {
+                android.util.Log.w("KonofanWeb", "port " + wantPort + " busy, fallback to random");
+            }
+        }
+        if (ss == null) ss = new ServerSocket(0, 256, InetAddress.getByName("127.0.0.1"));
+        server = ss;
         port = server.getLocalPort();
         running = true;
         Thread t = new Thread(new Runnable() {
@@ -194,6 +210,8 @@ public class MiniServer {
             }
             if (!f.isFile()) {
                 android.util.Log.i("KonofanWeb", "404 " + path);
+                if (misses.size() > 40) misses.pollFirst();
+                misses.addLast(path);
                 sendError(out, 404, "Not Found: " + path, method);
                 sock.close();
                 return;
