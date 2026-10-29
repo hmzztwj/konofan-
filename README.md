@@ -70,15 +70,34 @@ IV          = dcaa69cc863200d4eb74b4980bd60383
 ## 五、仓库里有什么
 
 ```
-docs/       逆向分析文档（结构、加密、媒体、安装包还原、离线化可行性、工具索引）
+docs/       逆向分析文档（结构、加密、媒体、安装包还原、离线化可行性、工具索引、WebView 壳补丁）
 tools/      全部自写工具（Python 3.10）：解密、命名还原、catalog 解析、bundle 导出、
-            AXML/dex 补丁、重打包、内存读密钥、MITM、mock server 等
+            AXML/dex 补丁、重打包、内存读密钥、MITM、mock server、WebView CDP 调试等
 data/       清单与索引（资产清单 31,592 行、CRI 映射 7,658 行、MasterData 索引、剧情索引）
 server/     mock API + TLS 中间人（当前被客户端 TLS 信任卡住，留作后续）
+android-konofanweb/   WebView 壳（第一版，site/ 由 MiniServer 托管）
+android-konofanmgr/   管理器壳（游戏内管理器 + 注入 bridge.js，离线补丁落在这里）
+patches/site/         站点侧补丁文件（__kf_lot.js、占位 CSS）与部署说明
 dist/       成品说明（去 mod 的 APK：Releases v0.1.0）
 ```
 
-## 六、快速开始
+## 六、安卓 WebView 壳（真机可玩客户端）
+
+WebView 壳把 `site/`（Vite 构建的离线客户端 + 本地 mock 数据）用内置 HTTP 服务
+（MiniServer，`127.0.0.1:8787`）托管起来，Android 端只负责起服务 + 开 WebView。
+桥接层 `bridge.js` 负责存档接管、召唤 RPC、礼物、命令下发，以及**彩票/商会等离线补丁**。
+
+已修的三处（细节与复现步骤见 [`docs/07`](docs/07_安卓离线客户端补丁记录.md)）：
+
+1. **教团招募报错** `Cannot read properties of undefined (reading 'guild')`：`/api/guild/home`
+   必须回**扁平** `{home:{guild:null,config:{ads:{adsOpen:false}}}}`，不能套 `data`。
+2. **教团/商会页「读取失败，请检查网络后再点一次」**：其实是 Vite 预载的
+   `guild59-B6De0oYB.css` / `imageAnnounce-8fL6REue.css` 404，补占位 CSS 即好，与网络无关。
+3. **「我的彩券」永远是空列表**：真正接管请求的是管理器注入的 `bridge.js` 前置彩票 IIFE
+   （返回 `{data:{...}}`），其 `home()` 原先硬编码 `mine:[]`；已改为按天汇总票根、
+   20:00 后结算（对中 6/5/4/3 位分四档），并支持「一等奖×1」这类中奖展示。
+
+## 七、快速开始
 
 ```bash
 # 1. 解密 MasterData（把 Data/ 指向你的 files/Data 目录）
@@ -94,6 +113,6 @@ python tools/cri_rename.py
 python tools/build_clean_apk.py
 ```
 
-## 七、许可
+## 八、许可
 
 代码 MIT。游戏资源、文本、音频的版权归 Sumzap / 角川 / 相关权利方所有，本仓库不提供这些内容。
