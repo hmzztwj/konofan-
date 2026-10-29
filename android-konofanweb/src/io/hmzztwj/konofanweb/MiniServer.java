@@ -90,6 +90,8 @@ public class MiniServer {
                 android.util.Log.i("KonofanWeb", "disk patch questx mode=" + mode + " keep=" + keep.length());
             }
 
+            injectEventStages(site, mode, on);
+
             java.io.File si = new java.io.File(site, "yuanban/story/index.json");
             java.io.File siFull = new java.io.File(site, "yuanban/story/index.full.json");
             if (si.isFile()) {
@@ -109,6 +111,67 @@ public class MiniServer {
             }
         } catch (Exception e) {
             android.util.Log.w("KonofanWeb", "apply event policy fail " + e);
+        }
+    }
+
+    /** 把开启活动的关卡塞进 quest59.json 的 areas（战斗入口按 areas 查关卡，活动关卡原本不在里面）。 */
+    private static void injectEventStages(java.io.File site, String mode, java.util.Set<String> on) {
+        try {
+            java.io.File q = new java.io.File(site, "yuanban/master/quest59.json");
+            java.io.File qf = new java.io.File(site, "yuanban/master/quest59.full.json");
+            java.io.File qx = new java.io.File(site, "yuanban/master/questx59.full.json");
+            if (!q.isFile() || !qx.isFile()) return;
+            if (!qf.exists()) copyFile(q, qf);
+            java.io.File src = qf.isFile() ? qf : q;
+            org.json.JSONObject root = new org.json.JSONObject(new String(readAll(src, 96 << 20), "UTF-8"));
+            org.json.JSONArray areas = root.optJSONArray("areas");
+            if (areas == null) return;
+            org.json.JSONObject qxr = new org.json.JSONObject(new String(readAll(qx, 96 << 20), "UTF-8"));
+            org.json.JSONArray evs = qxr.optJSONArray("event");
+            org.json.JSONArray stages = new org.json.JSONArray();
+            int n = 0;
+            for (int i = 0; evs != null && i < evs.length(); i++) {
+                org.json.JSONObject e = evs.getJSONObject(i);
+                if (!eventLive(mode, on, e.optString("id"))) continue;
+                org.json.JSONArray ss = e.optJSONArray("stages");
+                for (int j = 0; ss != null && j < ss.length(); j++) {
+                    org.json.JSONObject st = ss.getJSONObject(j);
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    o.put("id", st.optString("id"));
+                    o.put("title", st.optString("name", st.optString("title", "")));
+                    o.put("stamina", st.optInt("stamina", 5));
+                    o.put("power", st.optInt("power", 0));
+                    o.put("graphic", st.optString("graphic", "1340"));
+                    o.put("boss", st.optBoolean("boss", false));
+                    org.json.JSONArray en = st.optJSONArray("enemies");
+                    o.put("enemies", en == null ? new org.json.JSONArray() : en);
+                    o.put("drops", new org.json.JSONArray());
+                    o.put("unlock", 0);
+                    o.put("missions", new org.json.JSONArray());
+                    o.put("rewards", new org.json.JSONArray());
+                    stages.put(o);
+                    n++;
+                }
+            }
+            org.json.JSONObject area = new org.json.JSONObject();
+            area.put("part", 99);
+            area.put("area", 99);
+            area.put("unlock", 0);
+            area.put("title", "活动关卡");
+            org.json.JSONObject modes = new org.json.JSONObject();
+            org.json.JSONObject m1 = new org.json.JSONObject();
+            m1.put("image", "bg_mainquest_1_1");
+            m1.put("stages", stages);
+            modes.put("1", m1);
+            area.put("modes", modes);
+            org.json.JSONArray out = new org.json.JSONArray();
+            for (int i = 0; i < areas.length(); i++) out.put(areas.getJSONObject(i));
+            out.put(area);
+            root.put("areas", out);
+            writeFile(q, root.toString().getBytes("UTF-8"));
+            android.util.Log.i("KonofanWeb", "inject event stages=" + n);
+        } catch (Exception e) {
+            android.util.Log.w("KonofanWeb", "inject stages fail " + e);
         }
     }
 
@@ -470,6 +533,38 @@ public class MiniServer {
                     sendError(out, 500, "events fail", path);
                 }
                 out.flush(); sock.close(); return;
+            }
+
+            if (pathOnly != null && pathOnly.startsWith("/assets/member-") && pathOnly.endsWith(".js")) {
+                try {
+                    java.io.File jf = new java.io.File(rootForPatch(), pathOnly.substring(1));
+                    if (jf.isFile()) {
+                        String js = new String(readAll(jf, 32 << 20), "UTF-8");
+                        String before = js;
+                        js = js.replace("Gd=e=>!!Hd(e)?.hide||Ve(e)", "Gd=e=>!!Hd(e)?.hide||!1");
+                        js = js.replace("if(n)return jd(`closed`", "if(0)return jd(`closed`");
+                        js = js.replace("if(r)return jd(`closed`", "if(0)return jd(`closed`");
+                        if (!js.equals(before)) android.util.Log.i("KonofanWeb", "js patch " + pathOnly);
+                        byte[] b = js.getBytes("UTF-8");
+                        write(new String(b, "ISO-8859-1"), out, "text/javascript; charset=utf-8", b.length);
+                        out.flush(); sock.close(); return;
+                    }
+                } catch (Exception e) { android.util.Log.w("KonofanWeb", "js patch fail " + e); }
+            }
+
+            if ("/assets/member-C5jzuE8q.js".equals(pathOnly)) {
+                try {
+                    java.io.File jf = new java.io.File(rootForPatch(), "assets/member-C5jzuE8q.js");
+                    if (jf.isFile()) {
+                        String js = new String(readAll(jf, 32 << 20), "UTF-8");
+                        String before = js;
+                        js = js.replace("Gd=e=>!!Hd(e)?.hide||Ve(e)", "Gd=e=>!!Hd(e)?.hide||!1");
+                        if (!js.equals(before)) android.util.Log.i("KonofanWeb", "stage gate patched");
+                        byte[] b = js.getBytes("UTF-8");
+                        write(new String(b, "ISO-8859-1"), out, "text/javascript; charset=utf-8", b.length);
+                        out.flush(); sock.close(); return;
+                    }
+                } catch (Exception e) { android.util.Log.w("KonofanWeb", "js patch fail " + e); }
             }
 
             if ("/__mgr/config.json".equals(pathOnly)) {
